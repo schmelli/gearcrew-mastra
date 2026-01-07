@@ -119,24 +119,28 @@ describe('Retry with Exponential Backoff', () => {
     });
 
     it('should throw after max retries exceeded', async () => {
-      const mockFn = vi.fn().mockRejectedValue(new Error('always fails'));
+      // Use real timers with short delays to avoid fake timer issues
+      vi.useRealTimers();
+
+      let callCount = 0;
+      const mockFn = vi.fn().mockImplementation(async () => {
+        callCount++;
+        throw new Error('always fails');
+      });
 
       const config: RetryConfig = {
         maxRetries: 2,
-        baseDelayMs: 100,
-        maxDelayMs: 1000,
+        baseDelayMs: 1, // Very short delay for fast test
+        maxDelayMs: 10,
         backoffMultiplier: 2,
         jitterFactor: 0,
       };
 
-      const resultPromise = withRetry(mockFn, config);
+      await expect(withRetry(mockFn, config)).rejects.toThrow('always fails');
+      expect(callCount).toBe(3); // Initial + 2 retries
 
-      // Fast-forward through all retry delays
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.advanceTimersByTimeAsync(200);
-
-      await expect(resultPromise).rejects.toThrow('always fails');
-      expect(mockFn).toHaveBeenCalledTimes(3); // Initial + 2 retries
+      // Restore fake timers for other tests
+      vi.useFakeTimers();
     });
 
     it('should call onRetry callback', async () => {

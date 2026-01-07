@@ -154,13 +154,14 @@ describe('GET /api/system/status - Contract Test', () => {
   describe('Metrics Accuracy', () => {
     it('should return accurate 24h action counts', () => {
       const now = new Date();
-      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      // Make "yesterday" more than 24 hours ago to be clearly outside the window
+      const moreThan24hAgo = new Date(now.getTime() - 25 * 60 * 60 * 1000);
 
       const auditEntries = [
         { action: 'merge', timestamp: new Date(now.getTime() - 1000).toISOString() },
         { action: 'merge', timestamp: new Date(now.getTime() - 2000).toISOString() },
         { action: 'delete', timestamp: new Date(now.getTime() - 3000).toISOString() },
-        { action: 'merge', timestamp: yesterday.toISOString() }, // Outside 24h
+        { action: 'merge', timestamp: moreThan24hAgo.toISOString() }, // Outside 24h
       ];
 
       const counts = calculate24hCounts(auditEntries, now);

@@ -26,27 +26,26 @@ describe('WCC Analysis Tool', () => {
   describe('detectOrphanComponents', () => {
     it('should call MAGE WCC procedure with correct query', async () => {
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1, name: 'Node 1' }, component_id: 0 },
-        { node: { id: 2, name: 'Node 2' }, component_id: 0 },
-        { node: { id: 3, name: 'Orphan' }, component_id: 1 },
+        { nodeId: '1', nodeName: 'Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: 'Orphan', labels: ['Product'], properties: {}, component_id: 1 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
       const result = await detectOrphanComponents();
 
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining('weakly_connected_components.get'),
-        expect.any(Object)
+        expect.stringContaining('weakly_connected_components.get')
       );
     });
 
     it('should group nodes by component ID', async () => {
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1 }, component_id: 0 },
-        { node: { id: 2 }, component_id: 0 },
-        { node: { id: 3 }, component_id: 1 },
-        { node: { id: 4 }, component_id: 1 },
-        { node: { id: 5 }, component_id: 2 },
+        { nodeId: '1', nodeName: 'Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: 'Node 3', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '4', nodeName: 'Node 4', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '5', nodeName: 'Node 5', labels: ['Product'], properties: {}, component_id: 2 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -70,9 +69,9 @@ describe('WCC Analysis Tool', () => {
 
     it('should identify main graph as component 0', async () => {
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1 }, component_id: 0 },
-        { node: { id: 2 }, component_id: 0 },
-        { node: { id: 3 }, component_id: 0 },
+        { nodeId: '1', nodeName: 'Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: 'Node 3', labels: ['Product'], properties: {}, component_id: 0 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -84,9 +83,9 @@ describe('WCC Analysis Tool', () => {
 
     it('should identify orphan components (id > 0)', async () => {
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1 }, component_id: 0 },
-        { node: { id: 2 }, component_id: 1 },
-        { node: { id: 3 }, component_id: 2 },
+        { nodeId: '1', nodeName: 'Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Node 2', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '3', nodeName: 'Node 3', labels: ['Product'], properties: {}, component_id: 2 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -101,10 +100,10 @@ describe('WCC Analysis Tool', () => {
   describe('Component Size Classification', () => {
     it('should calculate component sizes correctly', async () => {
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1 }, component_id: 0 },
-        { node: { id: 2 }, component_id: 0 },
-        { node: { id: 3 }, component_id: 0 },
-        { node: { id: 4 }, component_id: 1 },
+        { nodeId: '1', nodeName: 'Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: 'Node 3', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '4', nodeName: 'Node 4', labels: ['Product'], properties: {}, component_id: 1 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -118,8 +117,11 @@ describe('WCC Analysis Tool', () => {
     });
 
     it('should classify size=1 components as potential empty orphans', async () => {
+      // Main component (0) must be larger than orphan components
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1, name: '' }, component_id: 1 },
+        { nodeId: '1', nodeName: 'Main Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Main Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: '', labels: ['Product'], properties: {}, component_id: 1 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -130,10 +132,13 @@ describe('WCC Analysis Tool', () => {
     });
 
     it('should classify size 2-3 as small islands', async () => {
+      // Main component (0) must be larger than orphan components
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1 }, component_id: 0 },
-        { node: { id: 2 }, component_id: 1 },
-        { node: { id: 3 }, component_id: 1 },
+        { nodeId: '1', nodeName: 'Main Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Main Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: 'Main Node 3', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '4', nodeName: 'Node 4', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '5', nodeName: 'Node 5', labels: ['Product'], properties: {}, component_id: 1 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -147,12 +152,17 @@ describe('WCC Analysis Tool', () => {
     });
 
     it('should classify size 4+ as large islands', async () => {
+      // Main component (0) must be larger than orphan components
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1 }, component_id: 0 },
-        { node: { id: 2 }, component_id: 1 },
-        { node: { id: 3 }, component_id: 1 },
-        { node: { id: 4 }, component_id: 1 },
-        { node: { id: 5 }, component_id: 1 },
+        { nodeId: '1', nodeName: 'Main Node 1', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '2', nodeName: 'Main Node 2', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '3', nodeName: 'Main Node 3', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '4', nodeName: 'Main Node 4', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '5', nodeName: 'Main Node 5', labels: ['Product'], properties: {}, component_id: 0 },
+        { nodeId: '6', nodeName: 'Node 6', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '7', nodeName: 'Node 7', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '8', nodeName: 'Node 8', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '9', nodeName: 'Node 9', labels: ['Product'], properties: {}, component_id: 1 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -200,9 +210,9 @@ describe('WCC Analysis Tool', () => {
   describe('Sample Names Extraction', () => {
     it('should extract sample node names for each component', async () => {
       mockQuery.mockResolvedValueOnce([
-        { node: { id: 1, name: 'Osprey Atmos' }, component_id: 1 },
-        { node: { id: 2, name: 'Patagonia Nano' }, component_id: 1 },
-        { node: { id: 3, name: 'REI Flash' }, component_id: 1 },
+        { nodeId: '1', nodeName: 'Osprey Atmos', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '2', nodeName: 'Patagonia Nano', labels: ['Product'], properties: {}, component_id: 1 },
+        { nodeId: '3', nodeName: 'REI Flash', labels: ['Product'], properties: {}, component_id: 1 },
       ]);
 
       const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
@@ -215,7 +225,10 @@ describe('WCC Analysis Tool', () => {
 
     it('should limit sample names to 5 per component', async () => {
       const manyNodes = Array(10).fill(null).map((_, i) => ({
-        node: { id: i, name: `Node ${i}` },
+        nodeId: `${i}`,
+        nodeName: `Node ${i}`,
+        labels: ['Product'],
+        properties: {},
         component_id: 1,
       }));
 

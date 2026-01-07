@@ -256,16 +256,16 @@ describe('API Security Review', () => {
       const validRunId = 'run-550e8400-e29b-41d4-a716-446655440000';
       const invalidRunIds = [
         '',
-        null,
-        undefined,
         'SELECT * FROM',
         '../../../etc/passwd',
       ];
 
-      expect(validRunId.length).toBeGreaterThan(0);
+      // Valid run ID should match expected pattern
+      expect(validRunId).toMatch(/^run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 
+      // Invalid run IDs should NOT match the pattern
       for (const invalid of invalidRunIds) {
-        expect(invalid === '' || invalid === null || invalid === undefined).toBe(true);
+        expect(invalid).not.toMatch(/^run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
       }
     });
 

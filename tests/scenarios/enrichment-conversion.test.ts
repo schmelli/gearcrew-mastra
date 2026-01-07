@@ -153,7 +153,7 @@ describe('Data Enrichment - Unit Conversion', () => {
 
       expect(normalized.weight_grams).toBeCloseTo(1134, 0);
       expect(normalized.temperature_celsius).toBeCloseTo(-6.7, 0);
-      expect(normalized.dimensions_cm.length).toBeCloseTo(60.96, 0);
+      expect((normalized.dimensions_cm as { length: number }).length).toBeCloseTo(60.96, 0);
       expect(normalized.capacity_liters).toBe(65);
     });
 
@@ -238,7 +238,8 @@ function parseWeight(text: string): { value: number; unit: string } | null {
 }
 
 function parseTemperature(text: string): { value: number; unit: string } | null {
-  const match = text.match(/(-?\d+(?:\.\d+)?)\s*°?\s*([FC])/i);
+  // Match patterns like "30°F", "30 F", "-10C", "30 degrees F"
+  const match = text.match(/(-?\d+(?:\.\d+)?)\s*(?:°|degrees?\s*)?\s*([FC])/i);
   if (match) {
     return { value: parseFloat(match[1]!), unit: match[2]!.toUpperCase() };
   }

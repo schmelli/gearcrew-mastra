@@ -159,7 +159,8 @@ describe('Chat Status Query - Integration Test', () => {
 
       const response = formatStatusResponse(status);
 
-      expect(response).toContain('1,000 nodes');
+      // Test that 1000 is formatted (locale-independent check)
+      expect(response).toMatch(/1[,.]?000 nodes/);
       expect(response).toContain('5 orphans');
       expect(response).toContain('3 pending approvals');
     });
