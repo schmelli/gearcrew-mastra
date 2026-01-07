@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  memgraph:
+    image: memgraph/memgraph-mage:latest
+    container_name: geargraph-memgraph
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+    environment:
+      - MEMGRAPH_USER=memgraph
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7687"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gardener:
+    build: .
+    container_name: graph-gardener
+    ports:
+      - "3000:3000"
+    environment:
+      - MEMGRAPH_HOST=memgraph
+      - MEMGRAPH_PORT=7687
+      - MEMGRAPH_USER=memgraph
+      - MEMGRAPH_PASSWORD=
+      - LIBSQL_URL=file:/data/memory.db
+      - AUDIT_LOG_PATH=/data/audit.jsonl
+      - NODE_ENV=production
+    volumes:
+      - gardener_data:/data
+    depends_on:
+      memgraph:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  memgraph_data:
+  gardener_data:

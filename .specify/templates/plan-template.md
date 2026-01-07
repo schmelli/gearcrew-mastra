@@ -31,7 +31,14 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+| Principle | Gate | Status |
+|-----------|------|--------|
+| I. Autonomous by Default | Does this feature operate without routine human intervention? | [ ] Pass / [ ] Violation (justify) |
+| II. Conservative Fixes | Are confidence thresholds defined? Are destructive actions flagged for approval? | [ ] Pass / [ ] N/A |
+| III. Full Auditability | Are all decisions logged with context and reasoning? | [ ] Pass / [ ] Violation (justify) |
+| IV. Self-Improvement | Does this feature support learning from feedback? | [ ] Pass / [ ] N/A |
+| V. Mathematical Rigor | Are graph algorithms used for structural checks (not LLM alone)? | [ ] Pass / [ ] N/A |
+| VI. Graceful Degradation | Does the feature handle failures without crashing? | [ ] Pass / [ ] Violation (justify) |
 
 ## Project Structure
 
