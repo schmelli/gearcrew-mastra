@@ -41,15 +41,19 @@ describe('Retry with Exponential Backoff', () => {
 
   describe('Delay Calculation', () => {
     it('should calculate exponential delay', () => {
-      const config = getDefaultRetryConfig();
+      // Use 0 jitter for deterministic test
+      const config: RetryConfig = {
+        ...getDefaultRetryConfig(),
+        jitterFactor: 0,
+      };
 
       const delay0 = calculateDelay(0, config);
       const delay1 = calculateDelay(1, config);
       const delay2 = calculateDelay(2, config);
 
-      expect(delay0).toBeCloseTo(1000, -2); // ~1000ms (with jitter)
-      expect(delay1).toBeCloseTo(2000, -2); // ~2000ms (with jitter)
-      expect(delay2).toBeCloseTo(4000, -2); // ~4000ms (with jitter)
+      expect(delay0).toBe(1000); // 1000ms base
+      expect(delay1).toBe(2000); // 1000 * 2^1
+      expect(delay2).toBe(4000); // 1000 * 2^2
     });
 
     it('should cap delay at maxDelayMs', () => {
@@ -101,11 +105,12 @@ describe('Retry with Exponential Backoff', () => {
         .mockRejectedValueOnce(new Error('fail 2'))
         .mockResolvedValue('success');
 
-      const resultPromise = withRetry(mockFn);
+      // Use 0 jitter for deterministic timing
+      const config: RetryConfig = { ...getDefaultRetryConfig(), jitterFactor: 0 };
+      const resultPromise = withRetry(mockFn, config);
 
-      // Fast-forward through delays
-      await vi.advanceTimersByTimeAsync(1000);
-      await vi.advanceTimersByTimeAsync(2000);
+      // Fast-forward through delays with runAllTimersAsync to handle all pending promises
+      await vi.runAllTimersAsync();
 
       const result = await resultPromise;
 
@@ -164,8 +169,8 @@ describe('Retry with Exponential Backoff', () => {
       const rateLimitError = new HttpError('Too Many Requests', 429);
       const mockFn = vi.fn().mockRejectedValueOnce(rateLimitError).mockResolvedValue('success');
 
-      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100 });
-      await vi.advanceTimersByTimeAsync(100);
+      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100, jitterFactor: 0 });
+      await vi.runAllTimersAsync();
       const result = await resultPromise;
 
       expect(result).toBe('success');
@@ -176,8 +181,8 @@ describe('Retry with Exponential Backoff', () => {
       const serverError = new HttpError('Internal Server Error', 500);
       const mockFn = vi.fn().mockRejectedValueOnce(serverError).mockResolvedValue('success');
 
-      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100 });
-      await vi.advanceTimersByTimeAsync(100);
+      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100, jitterFactor: 0 });
+      await vi.runAllTimersAsync();
       const result = await resultPromise;
 
       expect(result).toBe('success');
@@ -204,8 +209,8 @@ describe('Retry with Exponential Backoff', () => {
       const networkError = new Error('ECONNRESET');
       const mockFn = vi.fn().mockRejectedValueOnce(networkError).mockResolvedValue('success');
 
-      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100 });
-      await vi.advanceTimersByTimeAsync(100);
+      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100, jitterFactor: 0 });
+      await vi.runAllTimersAsync();
       const result = await resultPromise;
 
       expect(result).toBe('success');
@@ -215,8 +220,8 @@ describe('Retry with Exponential Backoff', () => {
       const timeoutError = new Error('ETIMEDOUT');
       const mockFn = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValue('success');
 
-      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100 });
-      await vi.advanceTimersByTimeAsync(100);
+      const resultPromise = withRetry(mockFn, { ...getDefaultRetryConfig(), baseDelayMs: 100, jitterFactor: 0 });
+      await vi.runAllTimersAsync();
       const result = await resultPromise;
 
       expect(result).toBe('success');

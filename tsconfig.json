@@ -19,9 +19,10 @@
     "incremental": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
+      "@/*": ["./src/*"],
       "@/lib/*": ["./src/lib/*"],
       "@/mastra/*": ["./src/mastra/*"],
+      "@/types": ["./src/types/index.ts"],
       "@/types/*": ["./src/types/*"]
     },
     "plugins": [
