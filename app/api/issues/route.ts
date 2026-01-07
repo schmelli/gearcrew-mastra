@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import type { InValue } from '@libsql/client';
 import { getLibSQLClient } from '@/mastra/index';
 import { GardeningIssue } from '@/types';
 
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
 
     // Build query
     let sql = 'SELECT * FROM gardening_issues WHERE 1=1';
-    const args: unknown[] = [];
+    const args: InValue[] = [];
 
     if (params.status !== 'all') {
       sql += ' AND status = ?';
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
 
     // Get total count
     let countSql = 'SELECT COUNT(*) as total FROM gardening_issues WHERE 1=1';
-    const countArgs: unknown[] = [];
+    const countArgs: InValue[] = [];
 
     if (params.status !== 'all') {
       countSql += ' AND status = ?';
@@ -116,17 +117,15 @@ export async function GET(request: NextRequest) {
 
     const issues: GardeningIssue[] = result.rows.map((row) => ({
       id: row.id as string,
-      issueType: row.issue_type as GardeningIssue['issueType'],
+      type: row.issue_type as GardeningIssue['type'],
       severity: row.severity as GardeningIssue['severity'],
-      title: row.title as string,
-      description: row.description as string,
-      affectedNodes: JSON.parse(row.affected_nodes as string),
-      detectedAt: row.detected_at as string,
+      entities: JSON.parse((row.affected_nodes as string) || '[]'),
+      suggestedAction: (row.description as string) || 'Review required',
+      confidence: (row.confidence as number) ?? 0.5,
       status: row.status as GardeningIssue['status'],
-      workflowRunId: row.workflow_run_id as string | undefined,
-      resolvedAt: row.resolved_at as string | undefined,
-      resolvedBy: row.resolved_by as string | undefined,
-      resolution: row.resolution as string | undefined,
+      detectedAt: row.detected_at as string,
+      workflowRunId: row.workflow_run_id as string,
+      graphContext: row.graph_context ? JSON.parse(row.graph_context as string) : undefined,
     }));
 
     return NextResponse.json({

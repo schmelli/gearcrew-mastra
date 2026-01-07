@@ -256,8 +256,9 @@ export async function runSchemaValidationStep(
         'morning-hygiene',
         'schema-validation',
         'WorkflowStep',
-        `Found ${validation.totalViolations} schema violations across ${issuesByLabel.length} labels`,
-        { violations: validation.totalViolations, healthScore: validation.healthScore }
+        {
+          reasoning: `Found ${validation.totalViolations} schema violations across ${issuesByLabel.length} labels`,
+        }
       );
 
       return {

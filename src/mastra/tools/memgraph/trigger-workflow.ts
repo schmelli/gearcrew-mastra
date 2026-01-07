@@ -147,7 +147,7 @@ async function executeWorkflowAsync(
   try {
     switch (workflowName) {
       case 'morning-hygiene':
-        await executeMorningHygieneWorkflow(runId, scope);
+        await executeMorningHygieneWorkflow({ workflowRunId: runId, scope });
         break;
 
       case 'deep-deduplication':

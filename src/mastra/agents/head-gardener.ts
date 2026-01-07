@@ -198,21 +198,27 @@ export class HeadGardenerAgent {
         case 'workflow_query':
           if (intent.runId) {
             const workflowStatus = await TOOLS.getWorkflowStatus.execute(intent.runId);
-            toolCalls.push({ tool: 'getWorkflowStatus', result: workflowStatus });
+            toolCalls.push({ tool: 'getWorkflowStatus', result: workflowStatus as unknown as Record<string, unknown> });
             response = workflowStatus
-              ? this.formatWorkflowResponse(workflowStatus)
+              ? this.formatWorkflowResponse(workflowStatus as unknown as Record<string, unknown>)
               : `Workflow run ${intent.runId} not found.`;
           } else {
             const workflows = await TOOLS.listRecentWorkflows.execute({ limit: 5 });
-            toolCalls.push({ tool: 'listRecentWorkflows', result: workflows });
-            response = this.formatWorkflowListResponse(workflows);
+            toolCalls.push({ tool: 'listRecentWorkflows', result: workflows as unknown as Record<string, unknown> });
+            response = this.formatWorkflowListResponse({
+              runs: workflows.runs as unknown as Record<string, unknown>[],
+              total: workflows.total,
+            });
           }
           break;
 
         case 'approval_query':
           const approvals = await TOOLS.getPendingApprovals.execute({ limit: 10 });
-          toolCalls.push({ tool: 'getPendingApprovals', result: approvals });
-          response = this.formatApprovalsResponse(approvals);
+          toolCalls.push({ tool: 'getPendingApprovals', result: approvals as unknown as Record<string, unknown> });
+          response = this.formatApprovalsResponse({
+            decisions: approvals.decisions as unknown as Record<string, unknown>[],
+            total: approvals.total,
+          });
           break;
 
         case 'audit_query':
@@ -261,8 +267,10 @@ export class HeadGardenerAgent {
 
         case 'enrichment_query':
           const enrichmentStatus = await TOOLS.getEnrichmentStatus.execute();
-          toolCalls.push({ tool: 'getEnrichmentStatus', result: enrichmentStatus });
-          response = this.formatEnrichmentResponse(enrichmentStatus);
+          toolCalls.push({ tool: 'getEnrichmentStatus', result: enrichmentStatus as unknown as Record<string, unknown> });
+          response = enrichmentStatus
+            ? this.formatEnrichmentResponse(enrichmentStatus as unknown as Record<string, unknown>)
+            : 'No enrichment status available.';
           break;
 
         case 'missing_data_query':

@@ -128,10 +128,7 @@ async function autoMergeStep(
   for (const evaluation of autoMergeEligible) {
     try {
       // Check for blocking rules
-      const blocked = await resolver.isBlockedByRule(
-        evaluation.candidate.nodeA.nodeId,
-        evaluation.candidate.nodeB.nodeId
-      );
+      const blocked = await resolver.isBlockedByRule(evaluation.candidate);
 
       if (blocked.blocked) {
         errors.push({
@@ -338,7 +335,7 @@ async function resumeStep(
       {
         confidence: approvalRequest.confidence,
         humanApproved: true,
-        notes: humanDecision.notes,
+        reasoning: humanDecision.notes,
       }
     );
 

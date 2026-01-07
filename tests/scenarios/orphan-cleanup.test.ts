@@ -45,7 +45,7 @@ describe('Orphan Cleanup - Empty Orphan Deletion', () => {
       ];
 
       // Import after mocks are set up
-      const { detectOrphans } = await import('@/mastra/tools/analysis/wcc');
+      const { detectOrphanComponents } = await import('@/mastra/tools/analysis/wcc');
 
       // Verify orphan detection identifies component_id > 0 as orphans
       expect(mockWccResult.filter(r => r.component_id > 0)).toHaveLength(2);

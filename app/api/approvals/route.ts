@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import type { InValue } from '@libsql/client';
 import { getLibSQLClient } from '@/mastra/index';
 import { ApprovalRequest } from '@/types';
 
@@ -29,7 +30,7 @@ export async function GET(request: NextRequest) {
 
     // Build query based on filters
     let sql = 'SELECT * FROM approval_requests WHERE 1=1';
-    const args: unknown[] = [];
+    const args: InValue[] = [];
 
     if (params.status !== 'all') {
       sql += ' AND status = ?';
@@ -48,7 +49,7 @@ export async function GET(request: NextRequest) {
 
     // Get total count for pagination
     let countSql = 'SELECT COUNT(*) as total FROM approval_requests WHERE 1=1';
-    const countArgs: unknown[] = [];
+    const countArgs: InValue[] = [];
 
     if (params.status !== 'all') {
       countSql += ' AND status = ?';

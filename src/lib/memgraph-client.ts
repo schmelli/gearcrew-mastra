@@ -66,10 +66,11 @@ export class MemgraphClient {
       const result: QueryResult = await session.run(cypher, params);
       return result.records.map((record: Neo4jRecord) => {
         const obj: Record<string, unknown> = {};
-        record.keys.forEach((key) => {
-          const value = record.get(key);
-          obj[key] = this.convertNeo4jValue(value);
-        });
+        for (const key of record.keys) {
+          if (typeof key === 'string') {
+            obj[key] = this.convertNeo4jValue(record.get(key));
+          }
+        }
         return obj as T;
       });
     } finally {
@@ -105,9 +106,11 @@ export class MemgraphClient {
       });
       return result.records.map((record: Neo4jRecord) => {
         const obj: Record<string, unknown> = {};
-        record.keys.forEach((key) => {
-          obj[key] = this.convertNeo4jValue(record.get(key));
-        });
+        for (const key of record.keys) {
+          if (typeof key === 'string') {
+            obj[key] = this.convertNeo4jValue(record.get(key));
+          }
+        }
         return obj as T;
       });
     } finally {
@@ -131,7 +134,7 @@ export class MemgraphClient {
     // Handle Neo4j Node
     if (this.isNeo4jNode(value)) {
       return {
-        id: neo4j.integer.toNumber(value.identity),
+        id: neo4j.isInt(value.identity) ? neo4j.integer.toNumber(value.identity) : value.identity,
         labels: value.labels,
         properties: this.convertProperties(value.properties),
       };
@@ -140,10 +143,10 @@ export class MemgraphClient {
     // Handle Neo4j Relationship
     if (this.isNeo4jRelationship(value)) {
       return {
-        id: neo4j.integer.toNumber(value.identity),
+        id: neo4j.isInt(value.identity) ? neo4j.integer.toNumber(value.identity) : value.identity,
         type: value.type,
-        startNodeId: neo4j.integer.toNumber(value.start),
-        endNodeId: neo4j.integer.toNumber(value.end),
+        startNodeId: neo4j.isInt(value.start) ? neo4j.integer.toNumber(value.start) : value.start,
+        endNodeId: neo4j.isInt(value.end) ? neo4j.integer.toNumber(value.end) : value.end,
         properties: this.convertProperties(value.properties),
       };
     }

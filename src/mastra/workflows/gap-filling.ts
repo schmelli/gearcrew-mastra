@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getEnricherAgent, EnrichmentRequest, EnrichmentResult } from '../agents/enricher';
 import { getAuditLogger } from '@/lib/audit-logger';
 import { getLibSQLClient } from '../index';
-import { getMemgraphClient } from '../tools/memgraph/client';
+import { getMemgraphClient } from '@/lib/memgraph-client';
 
 // Workflow configuration
 const WORKFLOW_CONFIG = {
@@ -217,8 +217,7 @@ export async function executeGapFillingWorkflow(
       'WorkflowRun',
       { status: 'completed' },
       { status: 'running' },
-      `Gap-filling completed: ${summary.nodesEnriched} nodes enriched with ${summary.fieldsEnriched} fields`,
-      { confidence: avgConfidence }
+      { confidence: avgConfidence, reasoning: `Gap-filling completed: ${summary.nodesEnriched} nodes enriched with ${summary.fieldsEnriched} fields` }
     );
 
     return {
@@ -242,8 +241,7 @@ export async function executeGapFillingWorkflow(
       'gap-filling',
       runId,
       'WorkflowRun',
-      state.error,
-      error instanceof Error ? error.stack : undefined
+      state.error
     );
 
     return {
@@ -325,23 +323,35 @@ async function scanForCandidates(options?: GapFillingOptions): Promise<Enrichmen
     LIMIT 500
   `;
 
-  const result = await client.executeRead(query, params);
+  interface ScanResult {
+    nodeId: string;
+    name: string;
+    brand: string;
+    category: string;
+    weight: number | null;
+    price: number | null;
+    dimensions: string | null;
+    capacity: number | null;
+    temperature: number | null;
+  }
 
-  return result.records.map((record) => {
+  const results = await client.readOnlyQuery<ScanResult>(query, params);
+
+  return results.map((record) => {
     const missingFields: string[] = [];
-    if (!record.get('weight')) missingFields.push('weight');
-    if (!record.get('price')) missingFields.push('price');
-    if (!record.get('dimensions')) missingFields.push('dimensions');
-    if (!record.get('capacity')) missingFields.push('capacity');
-    if (!record.get('temperature')) missingFields.push('temperature');
+    if (!record.weight) missingFields.push('weight');
+    if (!record.price) missingFields.push('price');
+    if (!record.dimensions) missingFields.push('dimensions');
+    if (!record.capacity) missingFields.push('capacity');
+    if (!record.temperature) missingFields.push('temperature');
 
     return {
-      nodeId: record.get('nodeId'),
+      nodeId: record.nodeId,
       nodeType: 'Product' as const,
       currentData: {
-        name: record.get('name'),
-        brand: record.get('brand'),
-        category: record.get('category'),
+        name: record.name,
+        brand: record.brand,
+        category: record.category,
       },
       missingFields,
       priority: 0.5, // Will be updated by prioritization
@@ -367,15 +377,20 @@ async function prioritizeByCentrality(
     RETURN n.id as nodeId, degree
   `;
 
-  const result = await client.executeRead(query, { nodeIds });
+  interface CentralityResult {
+    nodeId: string;
+    degree: number;
+  }
+
+  const results = await client.readOnlyQuery<CentralityResult>(query, { nodeIds });
 
   // Create lookup map
   const centralityMap = new Map<string, number>();
   let maxDegree = 1;
 
-  for (const record of result.records) {
-    const degree = record.get('degree').toNumber?.() || record.get('degree');
-    centralityMap.set(record.get('nodeId'), degree);
+  for (const record of results) {
+    const degree = typeof record.degree === 'number' ? record.degree : 0;
+    centralityMap.set(record.nodeId, degree);
     maxDegree = Math.max(maxDegree, degree);
   }
 

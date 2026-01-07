@@ -159,7 +159,7 @@ export async function recoverInterruptedWorkflows(): Promise<RecoveryResult> {
           'WorkflowRun',
           { status: 'interrupted' },
           { status: 'recovered' },
-          `Recovered workflow from step: ${workflow.currentStep || 'start'}`
+          { reasoning: `Recovered workflow from step: ${workflow.currentStep || 'start'}` }
         );
       } else {
         // Mark as failed due to unrecoverable state

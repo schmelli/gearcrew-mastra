@@ -3,6 +3,7 @@
  * Implements FR-010: List decisions awaiting human approval
  */
 
+import type { InValue } from '@libsql/client';
 import { getLibSQLClient } from '@/mastra/index';
 import { ApprovalRequest, GardeningIssue } from '@/types';
 
@@ -64,7 +65,7 @@ export async function listPendingDecisions(options?: {
     LEFT JOIN workflow_runs wr ON ar.workflow_run_id = wr.id
     WHERE ar.status = 'pending'
   `;
-  const args: unknown[] = [];
+  const args: InValue[] = [];
 
   if (proposedAction) {
     sql += ' AND ar.proposed_action = ?';
@@ -91,7 +92,7 @@ export async function listPendingDecisions(options?: {
     SELECT COUNT(*) as total FROM approval_requests ar
     WHERE ar.status = 'pending'
   `;
-  const countArgs: unknown[] = [];
+  const countArgs: InValue[] = [];
 
   if (proposedAction) {
     countSql += ' AND ar.proposed_action = ?';

@@ -88,18 +88,25 @@ describe('Manual Workflow Trigger - Integration Test', () => {
       );
 
       vi.mocked(executeMorningHygieneWorkflow).mockResolvedValue({
-        summary: {
-          deletedOrphans: 5,
-          flaggedNodes: 2,
-          validationErrors: 0,
+        workflowRunId: 'test-run-id',
+        status: 'completed',
+        statistics: {
+          itemsProcessed: 10,
+          issuesDetected: 7,
+          autoFixed: 5,
+          flaggedForReview: 2,
+          errors: 0,
         },
-        completedAt: new Date().toISOString(),
+        deletedOrphans: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
+        flaggedOrphans: ['node-6', 'node-7'],
+        schemaViolations: 0,
+        duration: 1500,
       });
 
       const result = await executeMorningHygieneWorkflow();
 
       expect(executeMorningHygieneWorkflow).toHaveBeenCalled();
-      expect(result.summary.deletedOrphans).toBe(5);
+      expect(result.deletedOrphans.length).toBe(5);
     });
 
     it('should return run ID after triggering', async () => {

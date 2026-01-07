@@ -95,7 +95,7 @@ export class ResolverAgent {
           reasoning: `Merge blocked by correction rule: ${ruleCheck.reason}`,
           propertyResolutions: {},
           requiresApproval: false,
-          conflictingProperties: enrichedCandidate.conflictingProperties,
+          conflictingProperties: enrichedCandidate.conflictingProperties ?? [],
         },
       };
     }
@@ -122,7 +122,7 @@ export class ResolverAgent {
             `Node A: ${bridgeCheckA.reason}. Node B: ${bridgeCheckB.reason}`,
           propertyResolutions: {},
           requiresApproval: false,
-          conflictingProperties: enrichedCandidate.conflictingProperties,
+          conflictingProperties: enrichedCandidate.conflictingProperties ?? [],
         },
       };
     }
@@ -144,10 +144,11 @@ export class ResolverAgent {
         : enrichedCandidate.nodeA.nodeId;
 
     // Resolve property conflicts
+    const conflictingProps = enrichedCandidate.conflictingProperties ?? [];
     const propertyResolutions = this.resolveProperties(
       enrichedCandidate.nodeA.nodeProperties,
       enrichedCandidate.nodeB.nodeProperties,
-      enrichedCandidate.conflictingProperties
+      conflictingProps
     );
 
     // Build decision
@@ -162,7 +163,7 @@ export class ResolverAgent {
         forceApproval || // FR-017: Rules can force approval
         (confidence >= CONFIDENCE_THRESHOLDS.REQUIRE_APPROVAL &&
           confidence < CONFIDENCE_THRESHOLDS.AUTO_MERGE),
-      conflictingProperties: enrichedCandidate.conflictingProperties,
+      conflictingProperties: conflictingProps,
     };
 
     const result: EvaluationResult = {
@@ -294,9 +295,10 @@ export class ResolverAgent {
     }
 
     // Conflicts
-    if (candidate.conflictingProperties.length > 0) {
+    const conflicts = candidate.conflictingProperties ?? [];
+    if (conflicts.length > 0) {
       parts.push(
-        `Conflicting properties: ${candidate.conflictingProperties.join(', ')}`
+        `Conflicting properties: ${conflicts.join(', ')}`
       );
     } else {
       parts.push('No property conflicts detected');
@@ -384,26 +386,37 @@ export class ResolverAgent {
     propertiesMerged: string[];
   }> {
     // Step 1: Transfer all relationships from absorbed to survivor
+    // Note: For dynamic relationship type transfer, we first collect relationships
+    // then process them. Memgraph doesn't support dynamic relationship creation in basic Cypher.
     const transferQuery = `
       MATCH (absorbed:GearItem {id: $absorbedId})-[r]->(target)
-      WHERE NOT EXISTS((survivor:GearItem {id: $survivorId})-[:\`${r.type}\`]->(target))
-      WITH absorbed, r, target
       MATCH (survivor:GearItem {id: $survivorId})
-      CREATE (survivor)-[newRel:\`${r.type}\`]->(target)
-      SET newRel = properties(r)
-      DELETE r
+      WHERE absorbed <> target AND survivor <> target
+      WITH survivor, absorbed, r, target, type(r) AS relType
+      CALL {
+        WITH survivor, target, r, relType
+        WITH survivor, target, properties(r) AS props
+        MERGE (survivor)-[newRel:RELATES_TO]->(target)
+        SET newRel = props
+        RETURN count(*) AS cnt
+      }
+      DETACH DELETE absorbed
       RETURN count(*) AS transferred
     `;
 
     // Step 2: Transfer incoming relationships
     const transferIncomingQuery = `
       MATCH (source)-[r]->(absorbed:GearItem {id: $absorbedId})
-      WHERE NOT EXISTS((source)-[:\`${r.type}\`]->(survivor:GearItem {id: $survivorId}))
-      WITH source, r, absorbed
       MATCH (survivor:GearItem {id: $survivorId})
-      CREATE (source)-[newRel:\`${r.type}\`]->(survivor)
-      SET newRel = properties(r)
-      DELETE r
+      WHERE source <> absorbed AND source <> survivor
+      WITH source, survivor, absorbed, r, type(r) AS relType
+      CALL {
+        WITH source, survivor, r
+        WITH source, survivor, properties(r) AS props
+        MERGE (source)-[newRel:RELATES_TO]->(survivor)
+        SET newRel = props
+        RETURN count(*) AS cnt
+      }
       RETURN count(*) AS transferred
     `;
 

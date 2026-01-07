@@ -143,6 +143,7 @@ export const ApprovalRequestSchema = z.object({
   resolvedAt: z.string().datetime().optional(),
   resolvedBy: z.string().optional(),
   resolution: ApprovalResolutionSchema.optional(),
+  conflictingProperties: z.array(z.string()).optional(),
 });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
 
@@ -188,11 +189,24 @@ export const AuditEntrySchema = z.object({
   entityType: z.string(),
   before: z.record(z.unknown()).nullable(),
   after: z.record(z.unknown()).nullable(),
+  // Core metadata fields
   confidence: z.number().min(0).max(1).optional(),
   reasoning: z.string().optional(),
   issueId: z.string().uuid().optional(),
   approvalId: z.string().uuid().optional(),
-});
+  // Extended metadata for specific actions
+  autoMerge: z.boolean().optional(),
+  humanApproved: z.boolean().optional(),
+  primaryNodeId: z.string().optional(),
+  secondaryNodeId: z.string().optional(),
+  fieldsFilled: z.array(z.string()).optional(),
+  source: z.string().optional(),
+  sourceUrl: z.string().optional(),
+  correctionRuleId: z.string().optional(),
+  afterState: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+}).passthrough(); // Allow additional properties
+
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
 // ============================================================================

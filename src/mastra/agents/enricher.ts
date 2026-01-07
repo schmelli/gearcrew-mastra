@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { FirecrawlClient, GearSpecs } from '../tools/firecrawl/web-search';
 import { ContentExtractor } from '../tools/firecrawl/content-extractor';
 import { getAuditLogger } from '@/lib/audit-logger';
-import { getMemgraphClient } from '../tools/memgraph/client';
+import { getMemgraphClient } from '@/lib/memgraph-client';
 
 // Configuration
 const ENRICHMENT_CONFIG = {
@@ -161,13 +161,15 @@ export class EnricherAgent {
           'gap-filling',
           request.nodeId,
           request.nodeType,
-          { enrichedFields: result.enrichedFields },
           result.enrichedFields.reduce(
             (acc, f) => ({ ...acc, [f]: null }),
-            {}
+            {} as Record<string, unknown>
           ),
-          `Enriched ${result.enrichedFields.length} fields from ${result.source}`,
-          { confidence: result.confidence }
+          { enrichedFields: result.enrichedFields },
+          {
+            confidence: result.confidence,
+            reasoning: `Enriched ${result.enrichedFields.length} fields from ${result.source}`,
+          }
         );
       } else {
         await logger.logSkip('gap-filling', 'gap-filling', request.nodeId, request.nodeType, result.error, {
@@ -213,31 +215,40 @@ export class EnricherAgent {
       LIMIT $limit
     `;
 
-    const result = await client.executeRead(query, { minCentrality, limit });
+    interface NodeRecord {
+      nodeId: string;
+      name: string;
+      brand: string | null;
+      weight: number | null;
+      price: number | null;
+      dimensions: string | null;
+      capacity: number | null;
+      degree: number;
+    }
 
-    return result.records.map((record) => {
+    const records = await client.readOnlyQuery<NodeRecord>(query, { minCentrality, limit });
+    const maxDegree = 100; // Normalize to 0-1 range
+
+    return records.map((record) => {
       const missingFields: string[] = [];
-      if (!record.get('weight')) missingFields.push('weight');
-      if (!record.get('price')) missingFields.push('price');
-      if (!record.get('dimensions')) missingFields.push('dimensions');
-      if (!record.get('capacity')) missingFields.push('capacity');
-
-      const degree = record.get('degree').toNumber?.() || record.get('degree');
-      const maxDegree = 100; // Normalize to 0-1 range
+      if (!record.weight) missingFields.push('weight');
+      if (!record.price) missingFields.push('price');
+      if (!record.dimensions) missingFields.push('dimensions');
+      if (!record.capacity) missingFields.push('capacity');
 
       return {
-        nodeId: record.get('nodeId'),
+        nodeId: record.nodeId,
         nodeType: nodeType as 'Product' | 'Brand' | 'Category',
         currentData: {
-          name: record.get('name'),
-          brand: record.get('brand'),
-          weight: record.get('weight'),
-          price: record.get('price'),
-          dimensions: record.get('dimensions'),
-          capacity: record.get('capacity'),
+          name: record.name,
+          brand: record.brand,
+          weight: record.weight,
+          price: record.price,
+          dimensions: record.dimensions,
+          capacity: record.capacity,
         },
         missingFields,
-        priority: Math.min(degree / maxDegree, 1),
+        priority: Math.min((record.degree ?? 0) / maxDegree, 1),
       };
     });
   }
@@ -281,9 +292,18 @@ export class EnricherAgent {
           break;
 
         case 'dimensions':
-          if (specs.dimensions) {
+          if (
+            specs.dimensions &&
+            typeof specs.dimensions.length === 'number' &&
+            typeof specs.dimensions.width === 'number'
+          ) {
             // Convert to cm
-            const cm = this.convertToCm(specs.dimensions);
+            const cm = this.convertToCm({
+              length: specs.dimensions.length,
+              width: specs.dimensions.width,
+              height: specs.dimensions.height,
+              unit: specs.dimensions.unit,
+            });
             updates.dimensions_cm = cm;
             enrichedFields.push('dimensions');
           } else {
@@ -370,7 +390,7 @@ export class EnricherAgent {
       RETURN n
     `;
 
-    await client.executeWrite(query, { nodeId, ...updates });
+    await client.writeTransaction(query, { nodeId, ...updates });
   }
 
   /**

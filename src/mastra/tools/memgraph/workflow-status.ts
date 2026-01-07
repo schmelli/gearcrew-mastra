@@ -3,6 +3,7 @@
  * Implements FR-010: Allow querying workflow execution status
  */
 
+import type { InValue } from '@libsql/client';
 import { getLibSQLClient } from '@/mastra/index';
 import { WorkflowRun, WorkflowRunSchema } from '@/types';
 
@@ -61,7 +62,7 @@ export async function listWorkflowRuns(options?: {
   const { workflowName, status, limit = 20, offset = 0 } = options ?? {};
 
   let sql = 'SELECT * FROM workflow_runs WHERE 1=1';
-  const args: unknown[] = [];
+  const args: InValue[] = [];
 
   if (workflowName) {
     sql += ' AND workflow_name = ?';
@@ -80,7 +81,7 @@ export async function listWorkflowRuns(options?: {
 
   // Get total count
   let countSql = 'SELECT COUNT(*) as total FROM workflow_runs WHERE 1=1';
-  const countArgs: unknown[] = [];
+  const countArgs: InValue[] = [];
 
   if (workflowName) {
     countSql += ' AND workflow_name = ?';

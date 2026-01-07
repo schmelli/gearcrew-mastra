@@ -181,7 +181,9 @@ export class Scheduler {
     const now = new Date();
 
     if (parts.length >= 5) {
-      const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+      const minute = parts[0] ?? '*';
+      const hour = parts[1] ?? '*';
+      const dayOfWeek = parts[4] ?? '*';
 
       // Create a date for the next occurrence
       const next = new Date(now);

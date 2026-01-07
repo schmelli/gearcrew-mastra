@@ -35,11 +35,11 @@ export class AuditLogger {
    * Log an audit entry (append-only)
    */
   async log(entry: Omit<AuditEntry, 'id' | 'timestamp'>): Promise<AuditEntry> {
-    const fullEntry: AuditEntry = {
+    const fullEntry = {
+      ...entry,
       id: randomUUID(),
       timestamp: new Date().toISOString(),
-      ...entry,
-    };
+    } as AuditEntry;
 
     // Validate entry
     AuditEntrySchema.parse(fullEntry);
@@ -133,7 +133,14 @@ export class AuditLogger {
     entityType: string,
     before: Record<string, unknown>,
     after: Record<string, unknown>,
-    options?: { confidence?: number; reasoning?: string; issueId?: string; approvalId?: string }
+    options?: {
+      confidence?: number;
+      reasoning?: string;
+      issueId?: string;
+      approvalId?: string;
+      autoMerge?: boolean;
+      humanApproved?: boolean;
+    }
   ): Promise<AuditEntry> {
     return this.log({
       workflowRunId,
