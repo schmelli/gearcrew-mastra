@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   status TEXT NOT NULL DEFAULT 'running',
   completed_at TEXT,
   result_summary TEXT,
+  context TEXT,
   error TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
