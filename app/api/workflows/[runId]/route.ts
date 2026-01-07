@@ -4,6 +4,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+// Force dynamic rendering to prevent database initialization during build
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 import { getWorkflowStatus } from '@/mastra/tools/memgraph/workflow-status';
 import { getAuditLogger } from '@/lib/audit-logger';
 import { getLibSQLClient } from '@/mastra/index';

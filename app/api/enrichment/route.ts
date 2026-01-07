@@ -4,6 +4,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+// Force dynamic rendering to prevent database initialization during build
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 import { z } from 'zod';
 import {
   executeGapFillingWorkflow,

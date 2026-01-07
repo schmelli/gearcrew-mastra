@@ -7,23 +7,42 @@ import { Mastra } from '@mastra/core';
 import { LibSQLStore } from '@mastra/libsql';
 import { createClient } from '@libsql/client';
 import { MASTRA_MEMORY_CONFIG } from './memory/schemas';
-import { getCorrectionRulesManager } from './memory/correction-rules';
+// Import getCorrectionRulesManager lazily to avoid circular dependency and build-time initialization
+import type { CorrectionRulesManager } from './memory/correction-rules';
 
 // ============================================================================
-// LibSQL Storage Configuration
+// LibSQL Storage Configuration (Lazy Initialization)
 // ============================================================================
 
-const storage = new LibSQLStore({
-  url: process.env.LIBSQL_URL ?? 'file:/data/memory.db',
-});
+let storage: LibSQLStore | null = null;
+
+function getStorage(): LibSQLStore {
+  if (!storage) {
+    storage = new LibSQLStore({
+      url: process.env.LIBSQL_URL ?? 'file:/data/memory.db',
+    });
+  }
+  return storage;
+}
 
 // ============================================================================
-// Mastra Instance
+// Mastra Instance (Lazy Initialization)
 // ============================================================================
 
-export const mastra = new Mastra({
-  storage,
-});
+let mastraInstance: Mastra | null = null;
+
+export function getMastra(): Mastra {
+  if (!mastraInstance) {
+    mastraInstance = new Mastra({
+      storage: getStorage(),
+    });
+  }
+  return mastraInstance;
+}
+
+// For backward compatibility - accessing this will throw at build time,
+// so only use getMastra() in API routes
+export const mastra = null as unknown as Mastra;
 
 // ============================================================================
 // Initialization
@@ -113,7 +132,7 @@ export function getLibSQLClient(): ReturnType<typeof createClient> {
 // ============================================================================
 
 export interface SharedMemoryContext {
-  correctionRules: ReturnType<typeof getCorrectionRulesManager>;
+  correctionRules: CorrectionRulesManager;
   sessionId: string;
   startedAt: string;
 }
@@ -124,8 +143,10 @@ let sharedMemory: SharedMemoryContext | null = null;
  * Get or create shared memory context for agents (FR-018)
  * This provides a unified memory context that all agents can access
  */
-export function getSharedMemoryContext(): SharedMemoryContext {
+export async function getSharedMemoryContext(): Promise<SharedMemoryContext> {
   if (!sharedMemory) {
+    // Dynamic import to avoid circular dependency and build-time initialization
+    const { getCorrectionRulesManager } = await import('./memory/correction-rules');
     sharedMemory = {
       correctionRules: getCorrectionRulesManager(),
       sessionId: `session-${Date.now()}`,
