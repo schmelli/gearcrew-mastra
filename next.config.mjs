@@ -2,15 +2,6 @@
 const nextConfig = {
   output: 'standalone',
 
-  // Externalize Node.js-only packages from bundling
-  serverExternalPackages: [
-    '@mastra/core',
-    '@mastra/libsql',
-    '@libsql/client',
-    'libsql',
-    'neo4j-driver',
-  ],
-
   // Disable ESLint during build (we run it separately)
   eslint: {
     ignoreDuringBuilds: true,
@@ -19,6 +10,18 @@ const nextConfig = {
   // Disable TypeScript checking during build (we run it separately)
   typescript: {
     ignoreBuildErrors: true,
+  },
+
+  // Experimental features
+  experimental: {
+    // Externalize Node.js-only packages from bundling
+    serverComponentsExternalPackages: [
+      '@mastra/core',
+      '@mastra/libsql',
+      '@libsql/client',
+      'libsql',
+      'neo4j-driver',
+    ],
   },
 
   // Custom webpack config for proper externalization
