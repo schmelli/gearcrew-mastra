@@ -328,8 +328,122 @@ export async function getPendingDecisionsSummary(): Promise<{
   };
 }
 
+/**
+ * Handle an approval decision (approve or reject)
+ */
+export async function handleApprovalDecision(
+  approvalId: string,
+  decision: 'approve' | 'reject',
+  notes?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  workflowRunId?: string;
+  remainingApprovals?: number;
+}> {
+  const db = getLibSQLClient();
+
+  // Find the approval request
+  const approvalResult = await db.execute({
+    sql: `
+      SELECT ar.*, wr.workflow_name, ar.workflow_run_id
+      FROM approval_requests ar
+      LEFT JOIN workflow_runs wr ON ar.workflow_run_id = wr.id
+      WHERE ar.id = ? AND ar.status = 'pending'
+    `,
+    args: [approvalId],
+  });
+
+  if (approvalResult.rows.length === 0) {
+    return {
+      success: false,
+      message: `Approval request ${approvalId} not found or already resolved`,
+    };
+  }
+
+  const approval = approvalResult.rows[0]!;
+  const workflowRunId = approval.workflow_run_id as string;
+  const stepId = approval.step_id as string;
+
+  // Import the resume function dynamically to avoid circular imports
+  const { resumeDeduplicationWorkflow, getPendingApprovals } = await import('@/mastra/workflows/deep-deduplication');
+
+  try {
+    // Resume the workflow with the decision
+    const result = await resumeDeduplicationWorkflow(
+      workflowRunId,
+      approvalId,
+      decision,
+      { notes }
+    );
+
+    // Check remaining approvals
+    const remainingApprovals = await getPendingApprovals(workflowRunId);
+
+    const candidates = JSON.parse(approval.candidates as string);
+    const nodeNames = candidates.map((c: { nodeName?: string }) => c.nodeName || 'Unknown').join(' / ');
+
+    return {
+      success: true,
+      message: decision === 'approve'
+        ? `✅ Approved merge of: ${nodeNames}`
+        : `❌ Rejected merge of: ${nodeNames}`,
+      workflowRunId,
+      remainingApprovals: remainingApprovals.length,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Failed to process decision: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Approve or reject all pending approvals for a workflow
+ */
+export async function bulkApprovalDecision(
+  workflowRunId: string,
+  decision: 'approve' | 'reject',
+  notes?: string
+): Promise<{
+  success: boolean;
+  processed: number;
+  failed: number;
+  message: string;
+}> {
+  const db = getLibSQLClient();
+
+  // Get all pending approvals for this workflow
+  const pendingResult = await db.execute({
+    sql: `SELECT id FROM approval_requests WHERE workflow_run_id = ? AND status = 'pending'`,
+    args: [workflowRunId],
+  });
+
+  let processed = 0;
+  let failed = 0;
+
+  for (const row of pendingResult.rows) {
+    const result = await handleApprovalDecision(row.id as string, decision, notes);
+    if (result.success) {
+      processed++;
+    } else {
+      failed++;
+    }
+  }
+
+  return {
+    success: failed === 0,
+    processed,
+    failed,
+    message: `${decision === 'approve' ? 'Approved' : 'Rejected'} ${processed} items${failed > 0 ? `, ${failed} failed` : ''}`,
+  };
+}
+
 export default {
   listPendingDecisions,
   getPendingDecision,
   getPendingDecisionsSummary,
+  handleApprovalDecision,
+  bulkApprovalDecision,
 };

@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
-import { listPendingDecisions, getPendingDecisionsSummary } from '../tools/memgraph/pending-decisions';
+import { listPendingDecisions, getPendingDecisionsSummary, handleApprovalDecision, bulkApprovalDecision } from '../tools/memgraph/pending-decisions';
 import { queryAuditLog, getTodaySummary, formatSummaryForChat } from '../tools/memgraph/audit-query';
 import { detectSupernodes, formatSupernodeReport } from '../tools/analysis/supernode-detector';
 import {
@@ -221,6 +221,10 @@ export class HeadGardenerAgent {
           });
           break;
 
+        case 'approval_action':
+          response = await this.handleApprovalAction(intent.approvalAction!, toolCalls);
+          break;
+
         case 'audit_query':
           const auditSummary = await TOOLS.getAuditSummary.execute();
           toolCalls.push({ tool: 'getAuditSummary', result: auditSummary });
@@ -316,7 +320,7 @@ export class HeadGardenerAgent {
    * Parse user intent from message
    */
   private parseIntent(message: string): {
-    type: 'status_query' | 'workflow_query' | 'approval_query' | 'audit_query' |
+    type: 'status_query' | 'workflow_query' | 'approval_query' | 'approval_action' | 'audit_query' |
           'health_query' | 'supernode_query' | 'graph_query' | 'trigger_workflow' |
           'enrichment_query' | 'missing_data_query' | 'help' | 'unknown';
     subject?: string;
@@ -324,6 +328,14 @@ export class HeadGardenerAgent {
     query?: string;
     workflowType?: string;
     scope?: { category?: string; brand?: string };
+    approvalAction?: {
+      decision: 'approve' | 'reject';
+      target: 'specific' | 'all' | 'range' | 'confidence';
+      approvalIds?: string[];
+      indices?: number[];
+      confidenceThreshold?: number;
+      notes?: string;
+    };
   } {
     const lowerMessage = message.toLowerCase();
 
@@ -367,7 +379,76 @@ export class HeadGardenerAgent {
       return { type: 'workflow_query', runId: runIdMatch?.[1] };
     }
 
-    // Approval queries
+    // Approval ACTIONS (approve/reject commands) - check before approval queries
+    const approveMatch = lowerMessage.match(/^(approve|accept|yes|confirm)/);
+    const rejectMatch = lowerMessage.match(/^(reject|deny|no|decline|skip)/);
+
+    if (approveMatch || rejectMatch) {
+      const decision = approveMatch ? 'approve' : 'reject';
+
+      // "approve all" / "reject all"
+      if (lowerMessage.includes(' all')) {
+        return {
+          type: 'approval_action',
+          approvalAction: { decision, target: 'all' },
+        };
+      }
+
+      // "approve first 5" / "reject first 3"
+      const firstNMatch = lowerMessage.match(/first\s+(\d+)/);
+      if (firstNMatch) {
+        const count = parseInt(firstNMatch[1], 10);
+        return {
+          type: 'approval_action',
+          approvalAction: {
+            decision,
+            target: 'range',
+            indices: Array.from({ length: count }, (_, i) => i),
+          },
+        };
+      }
+
+      // "approve 1, 2, 3" or "approve 1 2 3" or "approve #1 #2"
+      const numberMatches = message.match(/\d+/g);
+      if (numberMatches && numberMatches.length > 0) {
+        const indices = numberMatches.map((n) => parseInt(n, 10) - 1); // Convert to 0-indexed
+        return {
+          type: 'approval_action',
+          approvalAction: {
+            decision,
+            target: 'specific',
+            indices: indices.filter((i) => i >= 0),
+          },
+        };
+      }
+
+      // "approve above 90%" / "reject below 85%"
+      const confidenceMatch = lowerMessage.match(/(above|below|over|under|>=?|<=?)\s*(\d+)%?/);
+      if (confidenceMatch) {
+        const threshold = parseInt(confidenceMatch[2], 10) / 100;
+        const isAbove = ['above', 'over', '>', '>='].includes(confidenceMatch[1]);
+        return {
+          type: 'approval_action',
+          approvalAction: {
+            decision,
+            target: 'confidence',
+            confidenceThreshold: isAbove ? threshold : -threshold, // negative means below
+          },
+        };
+      }
+
+      // Just "approve" or "reject" with no specifier - approve/reject the first one
+      return {
+        type: 'approval_action',
+        approvalAction: {
+          decision,
+          target: 'specific',
+          indices: [0],
+        },
+      };
+    }
+
+    // Approval queries (show pending, not act on them)
     if (
       lowerMessage.includes('approval') ||
       lowerMessage.includes('pending') ||
@@ -609,6 +690,109 @@ Total relationships: ${(data.totalRelationships as number).toLocaleString()}
   }
 
   /**
+   * Handle approval/rejection actions
+   */
+  private async handleApprovalAction(
+    action: {
+      decision: 'approve' | 'reject';
+      target: 'specific' | 'all' | 'range' | 'confidence';
+      approvalIds?: string[];
+      indices?: number[];
+      confidenceThreshold?: number;
+      notes?: string;
+    },
+    toolCalls: Array<{ tool: string; result: unknown }>
+  ): Promise<string> {
+    // First, get pending approvals
+    const pendingResult = await listPendingDecisions({ limit: 100 });
+    const pending = pendingResult.decisions;
+
+    if (pending.length === 0) {
+      return 'No pending approvals to process. All caught up!';
+    }
+
+    let toProcess: typeof pending = [];
+    let description = '';
+
+    switch (action.target) {
+      case 'all':
+        toProcess = pending;
+        description = `all ${pending.length} pending`;
+        break;
+
+      case 'specific':
+      case 'range':
+        if (action.indices && action.indices.length > 0) {
+          toProcess = action.indices
+            .filter((i) => i >= 0 && i < pending.length)
+            .map((i) => pending[i]!);
+          description = toProcess.length === 1
+            ? `item #${action.indices[0]! + 1}`
+            : `items #${action.indices.map((i) => i + 1).join(', #')}`;
+        }
+        break;
+
+      case 'confidence':
+        if (action.confidenceThreshold !== undefined) {
+          const threshold = Math.abs(action.confidenceThreshold);
+          const isAbove = action.confidenceThreshold > 0;
+          toProcess = pending.filter((p) =>
+            isAbove ? p.confidence >= threshold : p.confidence < threshold
+          );
+          description = `${toProcess.length} items ${isAbove ? 'above' : 'below'} ${(threshold * 100).toFixed(0)}% confidence`;
+        }
+        break;
+    }
+
+    if (toProcess.length === 0) {
+      return 'No matching approvals found for your criteria.';
+    }
+
+    // Confirm before processing
+    const lines: string[] = [];
+    lines.push(`**${action.decision === 'approve' ? 'Approving' : 'Rejecting'} ${description}:**\n`);
+
+    // Show what will be processed (max 5 for readability)
+    const preview = toProcess.slice(0, 5);
+    for (const item of preview) {
+      lines.push(`- ${item.title} (${(item.confidence * 100).toFixed(0)}% confidence)`);
+    }
+    if (toProcess.length > 5) {
+      lines.push(`...and ${toProcess.length - 5} more\n`);
+    }
+
+    // Process each approval
+    const results: Array<{ success: boolean; message: string }> = [];
+    for (const item of toProcess) {
+      const result = await handleApprovalDecision(item.approvalId, action.decision, action.notes);
+      results.push(result);
+      toolCalls.push({
+        tool: 'handleApprovalDecision',
+        result: { approvalId: item.approvalId, ...result },
+      });
+    }
+
+    const succeeded = results.filter((r) => r.success).length;
+    const failed = results.filter((r) => !r.success).length;
+
+    lines.push(`\n**Results:**`);
+    lines.push(`${action.decision === 'approve' ? '✅ Approved' : '❌ Rejected'}: ${succeeded}`);
+    if (failed > 0) {
+      lines.push(`⚠️ Failed: ${failed}`);
+    }
+
+    // Show remaining
+    const remaining = pendingResult.total - succeeded;
+    if (remaining > 0) {
+      lines.push(`\n${remaining} approvals still pending.`);
+    } else {
+      lines.push(`\nAll approvals processed! Queue is empty.`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
    * Handle unknown intent
    */
   private handleUnknownIntent(message: string): string {
@@ -617,6 +801,7 @@ Total relationships: ${(data.totalRelationships as number).toLocaleString()}
 - **Status**: "What's the system status?" or "How many orphans today?"
 - **Workflows**: "Show recent workflows" or "Status of workflow run-123"
 - **Approvals**: "Show pending approvals" or "What needs my attention?"
+- **Approve/Reject**: "approve 1", "reject all", "approve above 90%"
 - **Audit**: "What happened today?" or "Show audit log"
 - **Health**: "Analyze graph health" or "Any issues?"
 
@@ -641,10 +826,19 @@ I can help you manage and monitor the GearGraph. Here's what I can do:
 - "What workflows are running?"
 - "Status of workflow run-123"
 
-**Pending Approvals**
+**Pending Approvals** (view)
 - "Show pending approvals"
 - "What needs my attention?"
 - "Any decisions waiting?"
+
+**Approve/Reject Duplicates** (action)
+- "approve" / "reject" - first pending item
+- "approve 1" / "reject 2" - specific item by number
+- "approve 1, 2, 3" - multiple items
+- "approve first 5" - first N items
+- "approve all" / "reject all" - all pending
+- "approve above 90%" - by confidence threshold
+- "reject below 85%" - by confidence threshold
 
 **Audit & History**
 - "What happened today?"
@@ -676,7 +870,9 @@ I can help you manage and monitor the GearGraph. Here's what I can do:
       case 'workflow_query':
         return ['Run hygiene check now', 'Show audit log', 'Any issues?'];
       case 'approval_query':
-        return ['Show workflow status', 'What happened today?', 'Analyze health'];
+        return ['Approve 1', 'Approve all', 'Reject below 85%'];
+      case 'approval_action':
+        return ['Show pending approvals', 'Approve all', 'What happened today?'];
       case 'health_query':
         return ['Detect supernodes', 'Show pending approvals', 'Run hygiene check'];
       case 'enrichment_query':
