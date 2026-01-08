@@ -168,6 +168,7 @@ export class AnalystAgent {
     const query = `
       CALL betweenness_centrality.get(TRUE, TRUE)
       YIELD node, betweenness_centrality
+      WITH node, betweenness_centrality
       WHERE betweenness_centrality > 0.1
       RETURN
         node.id AS nodeId,

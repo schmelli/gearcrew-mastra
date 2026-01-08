@@ -16,6 +16,7 @@ import { getLatestRuns } from '@/mastra/tools/memgraph/workflow-status';
 
 interface SystemStatusResponse {
   status: 'healthy' | 'degraded' | 'unhealthy';
+  statusReasons: string[];
   memgraphConnected: boolean;
   workflowsRunning: number;
   pendingApprovals: number;
@@ -116,17 +117,40 @@ export async function GET(request: NextRequest) {
       // Audit log might be empty
     }
 
-    // Determine overall status
+    // Determine overall status with reasons
     let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+    const statusReasons: string[] = [];
 
     if (!memgraphConnected) {
       status = 'unhealthy';
-    } else if (pendingApprovals > 10 || orphanCount > 20) {
-      status = 'degraded';
+      statusReasons.push('Cannot connect to Memgraph database');
+    } else {
+      // Check for degraded conditions
+      if (orphanCount > 100) {
+        status = 'degraded';
+        statusReasons.push(`${orphanCount} orphan nodes detected (threshold: 100)`);
+      }
+      if (pendingApprovals > 10) {
+        status = 'degraded';
+        statusReasons.push(`${pendingApprovals} pending approvals require attention (threshold: 10)`);
+      }
+      // Additional checks for healthy status context
+      if (status === 'healthy') {
+        if (orphanCount > 0) {
+          statusReasons.push(`${orphanCount} orphan nodes present (within acceptable range)`);
+        }
+        if (workflowsRunning > 0) {
+          statusReasons.push(`${workflowsRunning} workflow(s) currently running`);
+        }
+        if (statusReasons.length === 0) {
+          statusReasons.push('All systems operating normally');
+        }
+      }
     }
 
     const response: SystemStatusResponse = {
       status,
+      statusReasons,
       memgraphConnected,
       workflowsRunning,
       pendingApprovals,
@@ -158,6 +182,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         status: 'unhealthy',
+        statusReasons: [error instanceof Error ? error.message : 'Unknown system error'],
         memgraphConnected: false,
         workflowsRunning: 0,
         pendingApprovals: 0,
