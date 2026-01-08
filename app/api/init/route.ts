@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   id TEXT PRIMARY KEY,
   workflow_run_id TEXT NOT NULL,
   step_id TEXT NOT NULL,
+  issue_id TEXT,
   proposed_action TEXT NOT NULL,
   candidates TEXT NOT NULL,
   reasoning TEXT,
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   resolved_at TEXT,
   resolved_by TEXT,
   resolution TEXT,
+  resolution_notes TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
 
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS gardening_issues (
   id TEXT PRIMARY KEY,
   issue_type TEXT NOT NULL,
   severity TEXT NOT NULL,
+  title TEXT,
   affected_nodes TEXT NOT NULL,
   description TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.5,
