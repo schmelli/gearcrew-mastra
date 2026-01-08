@@ -182,7 +182,7 @@ export type CorrectionRule = z.infer<typeof CorrectionRuleSchema>;
 export const AuditEntrySchema = z.object({
   id: z.string().uuid(),
   timestamp: z.string().datetime(),
-  workflowRunId: z.string().uuid(),
+  workflowRunId: z.string(), // Accepts any string format (UUID or custom run IDs)
   workflowType: WorkflowTypeSchema,
   action: AuditActionSchema,
   entityId: z.string(),
