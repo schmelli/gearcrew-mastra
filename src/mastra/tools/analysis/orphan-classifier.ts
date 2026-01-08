@@ -94,7 +94,7 @@ export function classifyOrphanNode(
       nodeId: node.id,
       classification: 'valuable',
       hasValuableKeywords: true,
-      confidence: 0.45 + (detectedKeywords.length * 0.1),
+      confidence: Math.min(0.45 + (detectedKeywords.length * 0.1), 1.0),
       reasoning: `Contains valuable keywords: ${detectedKeywords.join(', ')}`,
       detectedKeywords,
     };
@@ -107,7 +107,7 @@ export function classifyOrphanNode(
       nodeId: node.id,
       classification: 'generic',
       hasValuableKeywords: false,
-      confidence: 0.85 + (genericScore * 0.1),
+      confidence: Math.min(0.85 + (genericScore * 0.1), 1.0),
       reasoning: `Content appears generic (score: ${(genericScore * 100).toFixed(0)}%)`,
       detectedKeywords: [],
     };
