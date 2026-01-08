@@ -38,12 +38,13 @@ export async function detectOrphanComponents(): Promise<WccResult> {
   const client = getMemgraphClient();
 
   // Run WCC algorithm to get all components
+  // Use coalesce to handle nodes without explicit id property
   const query = `
     CALL weakly_connected_components.get()
     YIELD node, component_id
     WITH node, component_id
     RETURN
-      node.id AS nodeId,
+      coalesce(node.id, toString(id(node))) AS nodeId,
       node.name AS nodeName,
       labels(node) AS labels,
       properties(node) AS properties,
@@ -63,6 +64,12 @@ export async function detectOrphanComponents(): Promise<WccResult> {
   const componentMap = new Map<number, NodeInfo[]>();
 
   for (const row of results) {
+    // Skip nodes without valid IDs
+    if (!row.nodeId) {
+      console.warn('Skipping node without ID in WCC analysis');
+      continue;
+    }
+
     const componentId = row.component_id;
     if (!componentMap.has(componentId)) {
       componentMap.set(componentId, []);
