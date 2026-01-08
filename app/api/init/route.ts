@@ -12,6 +12,16 @@ export const runtime = 'nodejs';
 import { getLibSQLClient } from '@/mastra/index';
 
 const SCHEMA = `
+-- Drop existing tables to ensure clean schema (safe for dev/testing)
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS semantic_memory;
+DROP TABLE IF EXISTS episodic_memory;
+DROP TABLE IF EXISTS working_memory;
+DROP TABLE IF EXISTS gardening_issues;
+DROP TABLE IF EXISTS correction_rules;
+DROP TABLE IF EXISTS approval_requests;
+DROP TABLE IF EXISTS workflow_runs;
+
 -- Workflow Runs Table
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id TEXT PRIMARY KEY,
