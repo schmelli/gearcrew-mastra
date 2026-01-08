@@ -464,6 +464,7 @@ export async function executeDeduplicationWorkflow(
 ): Promise<CompletionResult> {
   const db = getLibSQLClient();
   const workflowRunId = runId ?? `dedup-${Date.now()}`;
+  const wasTriggeredExternally = !!runId; // If runId provided, record already exists
 
   // Initialize context
   const context: DeduplicationContext = {
@@ -478,20 +479,22 @@ export async function executeDeduplicationWorkflow(
     errors: [],
   };
 
-  // Create workflow run record
-  await db.execute({
-    sql: `
-      INSERT INTO workflow_runs (id, workflow_name, status, started_at, context)
-      VALUES (?, ?, ?, ?, ?)
-    `,
-    args: [
-      context.runId,
-      'deep-deduplication',
-      'running',
-      context.startedAt,
-      JSON.stringify(context),
-    ],
-  });
+  // Only create workflow run record if not triggered via API (which already creates it)
+  if (!wasTriggeredExternally) {
+    await db.execute({
+      sql: `
+        INSERT INTO workflow_runs (id, workflow_name, status, started_at, context)
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      args: [
+        context.runId,
+        'deep-deduplication',
+        'running',
+        context.startedAt,
+        JSON.stringify(context),
+      ],
+    });
+  }
 
   try {
     // Step 1: Scan for duplicates
