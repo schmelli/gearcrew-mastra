@@ -38,13 +38,13 @@ export async function detectOrphanComponents(): Promise<WccResult> {
   const client = getMemgraphClient();
 
   // Run WCC algorithm to get all components
-  // Use coalesce to handle nodes without explicit id property
+  // Use toString to ensure nodeId is always a string (some nodes have numeric id props)
   const query = `
     CALL weakly_connected_components.get()
     YIELD node, component_id
     WITH node, component_id
     RETURN
-      coalesce(node.id, toString(id(node))) AS nodeId,
+      toString(coalesce(node.id, id(node))) AS nodeId,
       node.name AS nodeName,
       labels(node) AS labels,
       properties(node) AS properties,
