@@ -350,19 +350,25 @@ async function resumeStep(
 
     const ruleId = `rule-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+    const now = new Date().toISOString();
     await db.execute({
       sql: `
         INSERT INTO correction_rules (
-          id, rule_type, pattern, description, active, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          id, type, name, description, condition_json, action_json, source, confidence, created_at, updated_at, active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       args: [
         ruleId,
         'no_merge',
-        JSON.stringify({ entityIds: [nodeA.nodeId, nodeB.nodeId] }),
+        `No merge: ${nodeA.nodeName} / ${nodeB.nodeName}`,
         humanDecision.notes ?? 'User rejected merge',
+        JSON.stringify({ entityIds: [nodeA.nodeId, nodeB.nodeId] }),
+        JSON.stringify({ action: 'skip_merge' }),
+        'human_decision',
+        1.0,
+        now,
+        now,
         1,
-        new Date().toISOString(),
       ],
     });
 
