@@ -11,7 +11,6 @@ import { z } from 'zod';
 // DeepSeek API configuration
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const apiKey = process.env.DEEPSEEK_API_KEY ?? '';
-console.log('DeepSeek API key present:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
 
 interface DeepSeekMessage {
   role: 'system' | 'user' | 'assistant';
@@ -414,20 +413,9 @@ export class HeadGardenerAgent {
     }
 
     try {
-      console.log('Head Gardener: Sending request to DeepSeek', {
-        model: 'deepseek-chat',
-        messageCount: messages.length,
-      });
-
       // Call DeepSeek API directly (no tools for now)
       const result = await callDeepSeek(messages);
-
       const responseContent = result.choices[0]?.message?.content || 'I processed your request.';
-
-      console.log('Head Gardener: Received response', {
-        text: responseContent.substring(0, 100),
-        finishReason: result.choices[0]?.finish_reason,
-      });
 
       // Add assistant response to history
       this.conversationHistory.push({
