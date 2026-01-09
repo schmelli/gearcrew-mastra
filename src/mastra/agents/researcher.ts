@@ -11,7 +11,13 @@
 
 import { z } from 'zod';
 import { FirecrawlClient } from '../tools/firecrawl/web-search';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
+
+// DeepSeek provider (OpenAI-compatible API)
+const deepseek = createOpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+});
 import { generateObject } from 'ai';
 
 // ============================================================================
@@ -439,7 +445,7 @@ Be conservative with confidence - only include data you're confident about.`;
 
     try {
       const result = await generateObject({
-        model: anthropic('claude-sonnet-4-20250514'),
+        model: deepseek('deepseek-reasoner'),
         schema: ResearchFindingsSchema.omit({ nodeId: true, researchedAt: true }),
         prompt,
       });
@@ -496,7 +502,7 @@ Return an array where each item represents one product variant.`;
 
     try {
       const result = await generateObject({
-        model: anthropic('claude-sonnet-4-20250514'),
+        model: deepseek('deepseek-reasoner'),
         schema: z.object({
           variants: z.array(ResearchFindingsSchema.omit({ nodeId: true, researchedAt: true })),
         }),

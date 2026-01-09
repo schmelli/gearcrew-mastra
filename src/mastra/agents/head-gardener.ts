@@ -7,8 +7,14 @@
  */
 
 import { z } from 'zod';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
 import { generateText, tool } from 'ai';
+
+// DeepSeek provider (OpenAI-compatible API)
+const deepseek = createOpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+});
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
 import {
@@ -349,7 +355,7 @@ export class HeadGardenerAgent {
     try {
       // Use LLM with tool calling
       const result = await generateText({
-        model: anthropic('claude-sonnet-4-20250514'),
+        model: deepseek('deepseek-reasoner'),
         messages,
         tools: headGardenerTools,
         maxSteps: 5, // Allow multi-step tool usage
