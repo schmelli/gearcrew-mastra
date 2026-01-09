@@ -15,8 +15,10 @@ import { createOpenAI } from '@ai-sdk/openai';
 
 // DeepSeek provider (OpenAI-compatible API)
 const deepseek = createOpenAI({
-  baseURL: 'https://api.deepseek.com/v1',
+  name: 'deepseek',
+  baseURL: 'https://api.deepseek.com',
   apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+  compatibility: 'compatible', // Use compatible mode for non-OpenAI providers
 });
 import { generateObject } from 'ai';
 

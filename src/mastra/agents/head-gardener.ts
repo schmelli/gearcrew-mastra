@@ -15,8 +15,10 @@ const apiKey = process.env.DEEPSEEK_API_KEY ?? '';
 console.log('DeepSeek API key present:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
 
 const deepseek = createOpenAI({
-  baseURL: 'https://api.deepseek.com/v1',
+  name: 'deepseek',
+  baseURL: 'https://api.deepseek.com',
   apiKey,
+  compatibility: 'compatible', // Use compatible mode for non-OpenAI providers
 });
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
