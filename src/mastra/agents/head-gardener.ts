@@ -12,7 +12,7 @@ import { generateText, tool } from 'ai';
 
 // DeepSeek provider (OpenAI-compatible API)
 const deepseek = createOpenAI({
-  baseURL: 'https://api.deepseek.com',
+  baseURL: 'https://api.deepseek.com/v1',
   apiKey: process.env.DEEPSEEK_API_KEY ?? '',
 });
 import { registerAgent, getLibSQLClient } from '../index';
