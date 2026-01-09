@@ -11,14 +11,11 @@
 
 import { z } from 'zod';
 import { FirecrawlClient } from '../tools/firecrawl/web-search';
-import { createOpenAI } from '@ai-sdk/openai';
+import { createDeepSeek } from '@ai-sdk/deepseek';
 
-// DeepSeek provider (OpenAI-compatible API)
-const deepseek = createOpenAI({
-  name: 'deepseek',
-  baseURL: 'https://api.deepseek.com',
+// DeepSeek provider - using official SDK
+const deepseek = createDeepSeek({
   apiKey: process.env.DEEPSEEK_API_KEY ?? '',
-  compatibility: 'compatible', // Use compatible mode for non-OpenAI providers
 });
 import { generateObject } from 'ai';
 

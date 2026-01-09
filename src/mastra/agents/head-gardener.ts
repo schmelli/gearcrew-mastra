@@ -7,19 +7,74 @@
  */
 
 import { z } from 'zod';
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText, tool } from 'ai';
 
-// DeepSeek provider (OpenAI-compatible API)
+// DeepSeek API configuration
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 const apiKey = process.env.DEEPSEEK_API_KEY ?? '';
 console.log('DeepSeek API key present:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
 
-const deepseek = createOpenAI({
-  name: 'deepseek',
-  baseURL: 'https://api.deepseek.com',
-  apiKey,
-  compatibility: 'compatible', // Use compatible mode for non-OpenAI providers
-});
+interface DeepSeekMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface DeepSeekTool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+interface DeepSeekResponse {
+  choices: Array<{
+    message: {
+      role: string;
+      content?: string;
+      tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: {
+          name: string;
+          arguments: string;
+        };
+      }>;
+    };
+    finish_reason: string;
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+async function callDeepSeek(
+  messages: DeepSeekMessage[],
+  tools?: DeepSeekTool[]
+): Promise<DeepSeekResponse> {
+  const response = await fetch(DEEPSEEK_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages,
+      tools: tools && tools.length > 0 ? tools : undefined,
+      max_tokens: 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`DeepSeek API error: ${response.status} - ${errorText}`);
+  }
+
+  return response.json();
+}
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
 import {
@@ -64,11 +119,13 @@ When users want to approve or reject items, use the approval tools.
 When users want to trigger workflows, use the workflow tools.`;
 
 // ============================================================================
-// Tool Definitions for LLM
+// Tool Definitions for LLM (TEMPORARILY DISABLED - using direct API calls)
+// TODO: Re-enable once AI SDK compatibility is resolved
 // ============================================================================
 
+/*
 const headGardenerTools = {
-  getSystemStatus: tool({
+  getSystemStatus: {
     description: 'Get overall system health status including workflow state, pending approvals, and graph metrics',
     parameters: z.object({}),
     execute: async () => {
@@ -297,6 +354,7 @@ const headGardenerTools = {
     },
   }),
 };
+*/
 
 // ============================================================================
 // Chat Message Interface
@@ -329,7 +387,7 @@ export class HeadGardenerAgent {
   }
 
   /**
-   * Process a user chat message using LLM tool-calling
+   * Process a user chat message using direct DeepSeek API
    */
   async chat(userMessage: string): Promise<ChatResponse> {
     const timestamp = new Date().toISOString();
@@ -341,8 +399,8 @@ export class HeadGardenerAgent {
       timestamp,
     });
 
-    // Build messages for LLM
-    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+    // Build messages for DeepSeek API
+    const messages: DeepSeekMessage[] = [
       { role: 'system', content: SYSTEM_PROMPT },
     ];
 
@@ -355,49 +413,27 @@ export class HeadGardenerAgent {
       });
     }
 
-    const toolCalls: Array<{ tool: string; result: unknown }> = [];
-
     try {
       console.log('Head Gardener: Sending request to DeepSeek', {
         model: 'deepseek-chat',
         messageCount: messages.length,
-        toolCount: Object.keys(headGardenerTools).length,
       });
 
-      // Use LLM with tool calling
-      // Note: Using deepseek-chat as deepseek-reasoner doesn't support tool calling
-      // TODO: Re-enable tools once DeepSeek integration is confirmed working
-      const result = await generateText({
-        model: deepseek('deepseek-chat'),
-        messages,
-        // Temporarily disable tools to test basic connection
-        // tools: headGardenerTools,
-        // maxSteps: 5,
-      });
+      // Call DeepSeek API directly (no tools for now)
+      const result = await callDeepSeek(messages);
+
+      const responseContent = result.choices[0]?.message?.content || 'I processed your request.';
 
       console.log('Head Gardener: Received response', {
-        text: result.text?.substring(0, 100),
-        stepCount: result.steps.length,
+        text: responseContent.substring(0, 100),
+        finishReason: result.choices[0]?.finish_reason,
       });
-
-      // Collect tool calls for response
-      for (const step of result.steps) {
-        for (const call of step.toolCalls) {
-          toolCalls.push({
-            tool: call.toolName,
-            result: call.args,
-          });
-        }
-      }
-
-      const response = result.text || 'I processed your request but have no additional comments.';
 
       // Add assistant response to history
       this.conversationHistory.push({
         role: 'assistant',
-        content: response,
+        content: responseContent,
         timestamp: new Date().toISOString(),
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       });
 
       // Trim history if needed
@@ -409,9 +445,8 @@ export class HeadGardenerAgent {
       await this.saveToMemory();
 
       return {
-        message: response,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        suggestions: this.getSuggestions(toolCalls),
+        message: responseContent,
+        suggestions: this.getDefaultSuggestions(),
       };
     } catch (error) {
       // Log detailed error for debugging
@@ -419,7 +454,6 @@ export class HeadGardenerAgent {
         name: error instanceof Error ? error.name : 'Unknown',
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
-        cause: error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined,
       });
 
       const errorMessage = `I encountered an error: ${error instanceof Error ? error.message : String(error)}. Please try again.`;
@@ -438,30 +472,10 @@ export class HeadGardenerAgent {
   }
 
   /**
-   * Get contextual suggestions based on recent tool calls
+   * Get default suggestions
    */
-  private getSuggestions(toolCalls: Array<{ tool: string; result: unknown }>): string[] {
-    const lastTool = toolCalls[toolCalls.length - 1]?.tool;
-
-    switch (lastTool) {
-      case 'getSystemStatus':
-        return ['Show pending approvals', 'Analyze graph health', 'What happened today?'];
-      case 'getPendingApprovals':
-        return ['Approve first item', 'Approve all above 90%', 'Show item details'];
-      case 'approveItems':
-      case 'rejectItems':
-        return ['Show remaining approvals', 'What happened today?', 'Check system status'];
-      case 'analyzeGraphHealth':
-        return ['Detect supernodes', 'Show orphans', 'Run morning hygiene'];
-      case 'triggerWorkflow':
-        return ['Check workflow status', 'Show recent workflows', 'What happened today?'];
-      case 'triageItems':
-        return ['Research high priority items', 'Show items needing enrichment', 'Run data quality workflow'];
-      case 'findMissingData':
-        return ['Run data quality workflow', 'Triage these items', 'Research specific item'];
-      default:
-        return ['What is the system status?', 'Show pending approvals', 'Analyze graph health'];
-    }
+  private getDefaultSuggestions(): string[] {
+    return ['What is the system status?', 'Show pending approvals', 'Analyze graph health'];
   }
 
   /**
