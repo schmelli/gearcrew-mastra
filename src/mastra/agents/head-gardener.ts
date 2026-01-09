@@ -342,12 +342,22 @@ export class HeadGardenerAgent {
       { role: 'system', content: SYSTEM_PROMPT },
     ];
 
-    // Add recent conversation history for context
+    // Add recent conversation history for context (truncated to fit context window)
     const recentHistory = this.conversationHistory.slice(-10);
     for (const msg of recentHistory) {
+      // Truncate long messages to avoid context overflow
+      // User messages: keep full (usually short)
+      // Assistant messages: truncate if too long (may contain tool results)
+      const maxContentLength = msg.role === 'user' ? 2000 : 4000;
+      let content = msg.content;
+
+      if (content.length > maxContentLength) {
+        content = content.substring(0, maxContentLength) + '\n\n[... truncated for context ...]';
+      }
+
       messages.push({
         role: msg.role as 'user' | 'assistant',
-        content: msg.content,
+        content,
       });
     }
 
@@ -439,13 +449,25 @@ export class HeadGardenerAgent {
   }
 
   /**
-   * Save conversation to LibSQL memory
+   * Save conversation to LibSQL memory (with truncation to prevent bloat)
    */
   private async saveToMemory(): Promise<void> {
     const db = getLibSQLClient();
 
     try {
-      const recentMessages = this.conversationHistory.slice(-10);
+      // Truncate messages before saving to prevent memory bloat
+      const recentMessages = this.conversationHistory.slice(-10).map(msg => ({
+        ...msg,
+        // Truncate long content when persisting
+        content: msg.content.length > 5000
+          ? msg.content.substring(0, 5000) + '\n\n[... truncated ...]'
+          : msg.content,
+        // Don't persist full tool call results - just the tool names
+        toolCalls: msg.toolCalls?.map(tc => ({
+          tool: tc.tool,
+          result: typeof tc.result === 'object' ? '[result data]' : tc.result,
+        })),
+      }));
 
       await db.execute({
         sql: `
