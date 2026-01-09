@@ -19,9 +19,10 @@ import {
 import { listWorkflowRuns, countByStatus } from '@/mastra/tools/memgraph/workflow-status';
 
 const TriggerRequestSchema = z.object({
-  workflowName: z.enum(['morning-hygiene', 'deep-deduplication', 'gap-filling']),
+  workflowName: z.enum(['morning-hygiene', 'deep-deduplication', 'gap-filling', 'embedding-generation', 'data-quality']),
   scope: WorkflowScopeSchema.optional(),
   priority: z.enum(['normal', 'high']).optional().default('normal'),
+  options: z.record(z.unknown()).optional(), // Allow custom options for workflows like data-quality
 });
 
 /**

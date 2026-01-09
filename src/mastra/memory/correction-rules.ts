@@ -13,6 +13,8 @@ export const CorrectionRuleTypeSchema = z.enum([
   'always_merge',      // Auto-merge these patterns
   'require_approval',  // Always require approval for these patterns
   'field_priority',    // When merging, prefer this source's field values
+  'brand_trust',       // Trust level for a specific brand's data
+  'category_rule',     // Rules specific to a gear category
   'custom',            // Custom rule with condition and action
 ]);
 
@@ -389,6 +391,171 @@ export class CorrectionRulesManager {
       rulesBySource,
       mostApplied,
     };
+  }
+
+  /**
+   * Create a brand trust rule from successful enrichments
+   */
+  async createBrandTrustRule(
+    brandName: string,
+    trustLevel: 'high' | 'medium' | 'low',
+    fieldPriorities?: string[],
+    reason?: string
+  ): Promise<CorrectionRule> {
+    return this.createRule({
+      type: 'brand_trust',
+      name: `Brand trust: ${brandName} (${trustLevel})`,
+      description: reason || `Learned brand trust from successful operations`,
+      condition: {
+        brandPatterns: [brandName.toLowerCase()],
+      },
+      action: {
+        type: trustLevel === 'high' ? 'allow' : 'require_approval',
+        parameters: {
+          trustLevel,
+          fieldPriorities: fieldPriorities || [],
+        },
+      },
+      source: 'learned',
+      confidence: trustLevel === 'high' ? 0.9 : trustLevel === 'medium' ? 0.7 : 0.5,
+      active: true,
+    });
+  }
+
+  /**
+   * Create a category-specific rule
+   */
+  async createCategoryRule(
+    category: string,
+    ruleAction: 'require_approval' | 'allow',
+    requiredFields?: string[],
+    reason?: string
+  ): Promise<CorrectionRule> {
+    return this.createRule({
+      type: 'category_rule',
+      name: `Category rule: ${category}`,
+      description: reason || `Learned rule for category ${category}`,
+      condition: {
+        categoryPatterns: [category.toLowerCase()],
+      },
+      action: {
+        type: ruleAction,
+        parameters: {
+          requiredFields: requiredFields || [],
+        },
+      },
+      source: 'learned',
+      confidence: 0.75,
+      active: true,
+    });
+  }
+
+  /**
+   * Get brand trust level
+   */
+  async getBrandTrustLevel(brandName: string): Promise<{
+    trustLevel: 'high' | 'medium' | 'low' | 'unknown';
+    rule?: CorrectionRule;
+  }> {
+    if (!this.loaded) {
+      await this.loadRules();
+    }
+
+    const brandLower = brandName.toLowerCase();
+    for (const rule of this.rules.values()) {
+      if (!rule.active || rule.type !== 'brand_trust') continue;
+      if (rule.condition.brandPatterns?.some((p) => brandLower.includes(p.toLowerCase()))) {
+        return {
+          trustLevel: (rule.action.parameters?.trustLevel as 'high' | 'medium' | 'low') || 'medium',
+          rule,
+        };
+      }
+    }
+
+    return { trustLevel: 'unknown' };
+  }
+
+  /**
+   * Get rules applicable to an entity
+   */
+  async getApplicableRules(entity: {
+    brand?: string;
+    category?: string;
+    name?: string;
+  }): Promise<CorrectionRule[]> {
+    if (!this.loaded) {
+      await this.loadRules();
+    }
+
+    const applicable: CorrectionRule[] = [];
+    for (const rule of this.rules.values()) {
+      if (!rule.active) continue;
+
+      let matches = false;
+
+      if (entity.brand && rule.condition.brandPatterns) {
+        const brandLower = entity.brand.toLowerCase();
+        if (rule.condition.brandPatterns.some((p) => brandLower.includes(p.toLowerCase()))) {
+          matches = true;
+        }
+      }
+
+      if (entity.category && rule.condition.categoryPatterns) {
+        const catLower = entity.category.toLowerCase();
+        if (rule.condition.categoryPatterns.some((p) => catLower.includes(p.toLowerCase()))) {
+          matches = true;
+        }
+      }
+
+      if (matches) {
+        applicable.push(rule);
+      }
+    }
+
+    return applicable;
+  }
+
+  /**
+   * Find blocking rules for a proposed action
+   */
+  async findBlockingRule(
+    action: { type: string; nodeId?: string; data?: Record<string, unknown> },
+    entity?: { brand?: string; category?: string; name?: string }
+  ): Promise<CorrectionRule | null> {
+    if (!this.loaded) {
+      await this.loadRules();
+    }
+
+    for (const rule of this.rules.values()) {
+      if (!rule.active) continue;
+      if (rule.action.type !== 'block') continue;
+
+      // Check if expired
+      if (rule.expiresAt && new Date(rule.expiresAt) < new Date()) {
+        continue;
+      }
+
+      // Check brand/category match
+      if (entity) {
+        if (entity.brand && rule.condition.brandPatterns) {
+          const brandLower = entity.brand.toLowerCase();
+          if (rule.condition.brandPatterns.some((p) => brandLower.includes(p.toLowerCase()))) {
+            await this.recordRuleApplication(rule.id);
+            return rule;
+          }
+        }
+
+        if (entity.category && rule.condition.categoryPatterns) {
+          const catLower = entity.category.toLowerCase();
+          if (rule.condition.categoryPatterns.some((p) => catLower.includes(p.toLowerCase()))) {
+            await this.recordRuleApplication(rule.id);
+            return rule;
+          }
+        }
+      }
+    }
+
+    return null;
   }
 }
 

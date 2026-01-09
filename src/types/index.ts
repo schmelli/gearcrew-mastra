@@ -40,6 +40,8 @@ export const WorkflowTypeSchema = z.enum([
   'morning-hygiene',
   'deep-deduplication',
   'gap-filling',
+  'embedding-generation',
+  'data-quality',
   'manual',
 ]);
 export type WorkflowType = z.infer<typeof WorkflowTypeSchema>;
@@ -417,3 +419,210 @@ export const VALUABLE_KEYWORDS = [
   'waterproof',
   'ultralight',
 ] as const;
+
+// ============================================================================
+// Agent Pipeline Types (Phase 5)
+// ============================================================================
+
+/**
+ * Research request for the Researcher agent
+ */
+export interface ResearchRequest {
+  nodeId: string;
+  nodeName: string;
+  brand?: string;
+  category?: string;
+  missingFields: string[];
+  priority: number;
+}
+
+/**
+ * Curation source metadata
+ */
+export interface CurationSource {
+  agent: 'researcher' | 'resolver' | 'analyst' | 'manual';
+  workflowRunId: string;
+  confidence: number;
+  reasoning: string;
+}
+
+/**
+ * Curation action types
+ */
+export type CurationAction =
+  | 'update_properties'
+  | 'create_node'
+  | 'create_relationship'
+  | 'delete_node'
+  | 'merge_nodes'
+  | 'create_family'
+  | 'link_brand'
+  | 'link_technology'
+  | 'add_usage_scenario'
+  | 'add_insight'
+  | 'add_feedback_pattern'
+  | 'add_performance_context'
+  | 'add_temperature_range'
+  | 'add_weather_condition'
+  | 'add_comparison'
+  | 'add_data_source';
+
+/**
+ * Curation request for the Curator agent
+ */
+export interface CurationRequest {
+  action: CurationAction;
+  nodeId?: string;
+  data: Record<string, unknown>;
+  source: CurationSource;
+}
+
+/**
+ * Result from curation operations
+ */
+export interface CurationResult {
+  success: boolean;
+  operationsCount: number;
+  createdNodes: string[];
+  createdRelationships: string[];
+  errors: string[];
+}
+
+/**
+ * Triage priority levels
+ */
+export type TriagePriority = 'critical' | 'high' | 'medium' | 'low';
+
+/**
+ * Triage recommended actions
+ */
+export type TriageAction = 'research' | 'delete' | 'review' | 'skip';
+
+/**
+ * Triage result from the Analyst agent
+ */
+export interface TriageResult {
+  itemId: string;
+  itemName: string;
+  priority: TriagePriority;
+  priorityScore: number;
+  recommendedAction: TriageAction;
+  factors: {
+    centrality: number;
+    dataCompleteness: number;
+    staleness: number;
+    isOrphan: number;
+  };
+  reasoning: string;
+}
+
+/**
+ * Flagged item for triage
+ */
+export interface FlaggedItem {
+  nodeId: string;
+  name: string;
+  brand?: string;
+  category?: string;
+  flagReason: string;
+  flaggedAt?: string;
+}
+
+/**
+ * Completeness assessment result
+ */
+export interface CompletenessResult {
+  nodeId: string;
+  score: number;
+  missingFields: string[];
+  presentFields: string[];
+}
+
+// ============================================================================
+// Learning System Types (Phase 7 - Preparatory)
+// ============================================================================
+
+/**
+ * Correction rule types for learning from human feedback
+ */
+export type CorrectionRuleType =
+  | 'do_not_merge'
+  | 'always_merge'
+  | 'require_approval'
+  | 'field_priority'
+  | 'brand_trust';
+
+/**
+ * Correction rule pattern for matching
+ */
+export interface CorrectionRulePattern {
+  similarityRange?: [number, number];
+  properties?: string[];
+  brandScope?: string;
+  categoryScope?: string;
+  namePattern?: string;
+}
+
+/**
+ * Correction rule learned from human decisions
+ */
+export interface LearningCorrectionRule {
+  id: string;
+  ruleType: CorrectionRuleType;
+  pattern: CorrectionRulePattern;
+  reason: string;
+  sourceDecisionId: string;
+  createdAt: string;
+  expiresAt?: string;
+  hitCount: number;
+  active: boolean;
+}
+
+/**
+ * Confidence calibration for an agent/action pair
+ */
+export interface ConfidenceCalibration {
+  agentId: string;
+  actionType: string;
+  historicalAccuracy: number;
+  sampleSize: number;
+  lastUpdated: string;
+  adjustedThreshold: number;
+}
+
+/**
+ * Episodic memory entry for past decisions
+ */
+export interface EpisodicMemory {
+  id: string;
+  timestamp: string;
+  entityId: string;
+  entityName: string;
+  actionType: string;
+  decision: 'auto_approved' | 'human_approved' | 'human_rejected' | 'skipped';
+  context: {
+    workflowRunId: string;
+    confidence: number;
+    reasoning: string;
+  };
+  outcome?: {
+    successful: boolean;
+    notes?: string;
+  };
+}
+
+/**
+ * Semantic pattern learned from operations
+ */
+export interface SemanticPattern {
+  id: string;
+  patternType: 'brand_convention' | 'category_default' | 'naming_pattern' | 'relationship_rule';
+  pattern: {
+    condition: string;
+    inference: string;
+  };
+  confidence: number;
+  supportingEvidence: number;
+  createdAt: string;
+  updatedAt: string;
+}

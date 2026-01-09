@@ -1,175 +1,324 @@
 /**
- * T048-T049: Head Gardener Agent
+ * T048-T049: Head Gardener Agent (Phase 6 - True LLM Reasoning)
  * Implements FR-010, FR-011, FR-027: Interactive chat interface for graph management
- * LLM-backed agent with memory and graph tools
+ *
+ * REBUILT: Now uses actual LLM tool-calling instead of keyword matching
  * Per Constitution Principle III: Human Oversight
  */
 
 import { z } from 'zod';
+import { anthropic } from '@ai-sdk/anthropic';
+import { generateText, tool } from 'ai';
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
-import { listPendingDecisions, getPendingDecisionsSummary, handleApprovalDecision, bulkApprovalDecision } from '../tools/memgraph/pending-decisions';
-import { queryAuditLog, getTodaySummary, formatSummaryForChat } from '../tools/memgraph/audit-query';
+import {
+  listPendingDecisions,
+  handleApprovalDecision,
+} from '../tools/memgraph/pending-decisions';
+import { getTodaySummary, formatSummaryForChat } from '../tools/memgraph/audit-query';
 import { detectSupernodes, formatSupernodeReport } from '../tools/analysis/supernode-detector';
 import {
   triggerWorkflow,
-  parseTriggerIntent,
   formatTriggerResponse,
   getAvailableWorkflows,
 } from '../tools/memgraph/trigger-workflow';
 import { getAnalystAgent } from './analyst';
+import { getResearcherAgent } from './researcher';
+import { getCuratorAgent } from './curator';
 import { getMemgraphClient } from '@/lib/memgraph-client';
-import { getEnricherAgent } from './enricher';
-import { getGapFillingStatus, executeGapFillingWorkflow } from '../workflows/gap-filling';
 
-/**
- * Tool definitions for the Head Gardener
- */
-const TOOLS = {
-  getSystemStatus: {
-    name: 'getSystemStatus',
-    description: 'Get overall system health status including workflow state and metrics',
-    execute: getSystemStatus,
-  },
-  getWorkflowStatus: {
-    name: 'getWorkflowStatus',
-    description: 'Get status of a specific workflow run by ID',
-    execute: async (runId: string) => getWorkflowStatus(runId),
-  },
-  listRecentWorkflows: {
-    name: 'listRecentWorkflows',
-    description: 'List recent workflow runs with optional filtering',
-    execute: async (options?: { status?: string; limit?: number }) => listWorkflowRuns(options),
-  },
-  getPendingApprovals: {
-    name: 'getPendingApprovals',
-    description: 'Get list of pending approval decisions awaiting human review',
-    execute: async (options?: { limit?: number }) => listPendingDecisions(options),
-  },
-  getAuditSummary: {
-    name: 'getAuditSummary',
-    description: 'Get summary of actions taken today or in a specified time range',
+// ============================================================================
+// System Prompt for LLM Reasoning
+// ============================================================================
+
+const SYSTEM_PROMPT = `You are the Head Gardener, a conversational AI assistant that manages a graph database of outdoor gear products. You coordinate a team of specialized agents:
+
+- **Analyst**: For graph analysis, orphan detection, supernode identification, schema validation, and triage
+- **Researcher**: For web research to find missing product data (technologies, usage scenarios, feedback patterns)
+- **Curator**: For executing all graph modifications (enrichment, merges, deletions)
+- **Resolver**: For handling duplicate detection and merging decisions
+
+You have access to various tools to help manage the graph. When users ask questions, use your tools to gather information and provide helpful responses.
+
+IMPORTANT GUIDELINES:
+1. Always be helpful and explain what you're doing
+2. For approval actions, clearly state what will be approved/rejected
+3. For destructive operations, confirm with the user first
+4. Provide concrete suggestions for next steps
+5. Keep responses concise but informative
+6. Use markdown formatting for readability
+
+When users ask about system status, health, or workflows, use the appropriate tools to get real data.
+When users want to approve or reject items, use the approval tools.
+When users want to trigger workflows, use the workflow tools.`;
+
+// ============================================================================
+// Tool Definitions for LLM
+// ============================================================================
+
+const headGardenerTools = {
+  getSystemStatus: tool({
+    description: 'Get overall system health status including workflow state, pending approvals, and graph metrics',
+    parameters: z.object({}),
+    execute: async () => {
+      return await getSystemStatus();
+    },
+  }),
+
+  getWorkflowStatus: tool({
+    description: 'Get status of a specific workflow run by its ID',
+    parameters: z.object({
+      runId: z.string().describe('The workflow run ID to check'),
+    }),
+    execute: async ({ runId }) => {
+      return await getWorkflowStatus(runId);
+    },
+  }),
+
+  listRecentWorkflows: tool({
+    description: 'List recent workflow runs with optional status filtering',
+    parameters: z.object({
+      status: z.enum(['running', 'completed', 'failed', 'suspended']).optional()
+        .describe('Filter by workflow status'),
+      limit: z.number().default(5).describe('Maximum number of results'),
+    }),
+    execute: async ({ status, limit }) => {
+      return await listWorkflowRuns({ status, limit });
+    },
+  }),
+
+  getPendingApprovals: tool({
+    description: 'Get list of pending approval decisions awaiting human review (duplicates, merges)',
+    parameters: z.object({
+      limit: z.number().default(10).describe('Maximum number of results'),
+    }),
+    execute: async ({ limit }) => {
+      return await listPendingDecisions({ limit });
+    },
+  }),
+
+  approveItems: tool({
+    description: 'Approve pending items. Use this when user says "approve", "accept", "yes", or similar',
+    parameters: z.object({
+      indices: z.array(z.number()).describe('0-indexed positions of items to approve (from getPendingApprovals)'),
+      notes: z.string().optional().describe('Optional notes for the approval'),
+    }),
+    execute: async ({ indices, notes }) => {
+      const pending = await listPendingDecisions({ limit: 100 });
+      const results = [];
+      for (const idx of indices) {
+        if (idx >= 0 && idx < pending.decisions.length) {
+          const item = pending.decisions[idx]!;
+          const result = await handleApprovalDecision(item.approvalId, 'approve', notes);
+          results.push({ item: item.title, ...result });
+        }
+      }
+      return { approved: results.length, results };
+    },
+  }),
+
+  rejectItems: tool({
+    description: 'Reject pending items. Use this when user says "reject", "deny", "skip", or similar',
+    parameters: z.object({
+      indices: z.array(z.number()).describe('0-indexed positions of items to reject (from getPendingApprovals)'),
+      notes: z.string().optional().describe('Optional notes for the rejection'),
+    }),
+    execute: async ({ indices, notes }) => {
+      const pending = await listPendingDecisions({ limit: 100 });
+      const results = [];
+      for (const idx of indices) {
+        if (idx >= 0 && idx < pending.decisions.length) {
+          const item = pending.decisions[idx]!;
+          const result = await handleApprovalDecision(item.approvalId, 'reject', notes);
+          results.push({ item: item.title, ...result });
+        }
+      }
+      return { rejected: results.length, results };
+    },
+  }),
+
+  approveByConfidence: tool({
+    description: 'Approve all pending items above a confidence threshold',
+    parameters: z.object({
+      threshold: z.number().min(0).max(1).describe('Minimum confidence (0-1) to approve'),
+      notes: z.string().optional(),
+    }),
+    execute: async ({ threshold, notes }) => {
+      const pending = await listPendingDecisions({ limit: 100 });
+      const toApprove = pending.decisions.filter(d => d.confidence >= threshold);
+      const results = [];
+      for (const item of toApprove) {
+        const result = await handleApprovalDecision(item.approvalId, 'approve', notes);
+        results.push({ item: item.title, confidence: item.confidence, ...result });
+      }
+      return { approved: results.length, threshold, results };
+    },
+  }),
+
+  getAuditSummary: tool({
+    description: 'Get summary of actions taken today (creates, updates, merges, deletes)',
+    parameters: z.object({}),
     execute: async () => {
       const summary = await getTodaySummary();
-      return formatSummaryForChat(summary);
+      return { raw: summary, formatted: formatSummaryForChat(summary) };
     },
-  },
-  analyzeGraphHealth: {
-    name: 'analyzeGraphHealth',
-    description: 'Analyze graph structure for health issues including orphans and supernodes',
+  }),
+
+  analyzeGraphHealth: tool({
+    description: 'Analyze graph structure for health issues including orphans, supernodes, and schema violations',
+    parameters: z.object({}),
     execute: async () => {
       const analyst = getAnalystAgent();
-      return analyst.getHealthSummary();
+      return await analyst.getHealthSummary();
     },
-  },
-  detectSupernodes: {
-    name: 'detectSupernodes',
-    description: 'Detect supernode anomalies in the graph',
+  }),
+
+  analyzeOrphans: tool({
+    description: 'Detect and classify orphan nodes (disconnected from main graph)',
+    parameters: z.object({}),
+    execute: async () => {
+      const analyst = getAnalystAgent();
+      return await analyst.analyzeOrphans();
+    },
+  }),
+
+  detectSupernodes: tool({
+    description: 'Detect supernode anomalies (nodes with unusually high connections)',
+    parameters: z.object({}),
     execute: async () => {
       const analysis = await detectSupernodes();
-      return formatSupernodeReport(analysis);
+      return { raw: analysis, formatted: formatSupernodeReport(analysis) };
     },
-  },
-  queryGraph: {
-    name: 'queryGraph',
-    description: 'Execute a read-only Cypher query against the graph (FR-031: read-only mode)',
-    execute: executeReadOnlyQuery,
-  },
-  triggerWorkflow: {
-    name: 'triggerWorkflow',
-    description: 'Trigger a workflow manually (FR-014)',
-    execute: async (workflowName: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling', scope?: { category?: string; brand?: string }) => {
-      return triggerWorkflow(workflowName, { scope });
+  }),
+
+  triageItems: tool({
+    description: 'Use the Analyst to triage flagged items and recommend actions (research, delete, review, skip)',
+    parameters: z.object({
+      limit: z.number().default(20).describe('Maximum items to triage'),
+    }),
+    execute: async ({ limit }) => {
+      const analyst = getAnalystAgent();
+      const items = await analyst.findItemsNeedingEnrichment({ limit, maxCompleteness: 0.7 });
+      const flagged = items.map(item => ({
+        nodeId: item.nodeId,
+        name: item.name,
+        brand: item.brand,
+        category: item.category,
+        flagReason: item.flagReason,
+      }));
+      return await analyst.triageFlaggedItems(flagged);
     },
-  },
-  listAvailableWorkflows: {
-    name: 'listAvailableWorkflows',
-    description: 'List all available workflows',
-    execute: getAvailableWorkflows,
-  },
-  getEnrichmentStatus: {
-    name: 'getEnrichmentStatus',
-    description: 'Get enrichment/gap-filling workflow status',
-    execute: async (runId?: string) => {
-      if (runId) {
-        return getGapFillingStatus(runId);
-      }
-      // Get latest enrichment run
-      const db = getLibSQLClient();
-      const result = await db.execute({
-        sql: `SELECT id, status, started_at, completed_at, result_summary
-              FROM workflow_runs WHERE workflow_name = 'gap-filling'
-              ORDER BY started_at DESC LIMIT 1`,
-        args: [],
-      });
-      if (result.rows.length === 0) {
-        return { message: 'No enrichment runs found' };
-      }
-      const row = result.rows[0]!;
+  }),
+
+  triggerWorkflow: tool({
+    description: 'Manually trigger a workflow (morning-hygiene, deep-deduplication, data-quality, embedding-generation)',
+    parameters: z.object({
+      workflowName: z.enum(['morning-hygiene', 'deep-deduplication', 'data-quality', 'gap-filling', 'embedding-generation'])
+        .describe('Which workflow to run'),
+      scope: z.object({
+        category: z.string().optional(),
+        brand: z.string().optional(),
+      }).optional().describe('Optional scope filter'),
+      options: z.record(z.unknown()).optional().describe('Workflow-specific options'),
+    }),
+    execute: async ({ workflowName, scope, options }) => {
+      const result = await triggerWorkflow(workflowName, { scope, workflowOptions: options });
+      return { raw: result, formatted: formatTriggerResponse(result) };
+    },
+  }),
+
+  listAvailableWorkflows: tool({
+    description: 'List all available workflows and their descriptions',
+    parameters: z.object({}),
+    execute: async () => {
+      return getAvailableWorkflows();
+    },
+  }),
+
+  queryGraph: tool({
+    description: 'Execute a read-only Cypher query against the graph database',
+    parameters: z.object({
+      query: z.string().describe('Cypher query (read-only, no CREATE/DELETE/SET)'),
+    }),
+    execute: async ({ query }) => {
+      return await executeReadOnlyQuery(query);
+    },
+  }),
+
+  findMissingData: tool({
+    description: 'Find nodes with missing data that could benefit from enrichment',
+    parameters: z.object({
+      limit: z.number().default(20),
+    }),
+    execute: async ({ limit }) => {
+      const analyst = getAnalystAgent();
+      const items = await analyst.findItemsNeedingEnrichment({ limit, maxCompleteness: 0.7 });
       return {
-        runId: row.id,
-        status: row.status,
-        startedAt: row.started_at,
-        completedAt: row.completed_at,
-        summary: row.result_summary ? JSON.parse(row.result_summary as string) : null,
-      };
-    },
-  },
-  findMissingData: {
-    name: 'findMissingData',
-    description: 'Find nodes with missing data that need enrichment',
-    execute: async (options?: { limit?: number }) => {
-      const enricher = getEnricherAgent();
-      const nodes = await enricher.findNodesNeedingEnrichment({ limit: options?.limit || 20 });
-      return {
-        count: nodes.length,
-        nodes: nodes.map((n) => ({
-          nodeId: n.nodeId,
-          name: n.currentData.name,
-          missingFields: n.missingFields,
-          priority: n.priority,
+        count: items.length,
+        items: items.map(item => ({
+          nodeId: item.nodeId,
+          name: item.name,
+          completeness: `${Math.round(item.completeness * 100)}%`,
+          flagReason: item.flagReason,
         })),
       };
     },
-  },
+  }),
+
+  researchItem: tool({
+    description: 'Use the Researcher agent to gather comprehensive data about a specific product',
+    parameters: z.object({
+      nodeId: z.string().describe('The node ID to research'),
+      nodeName: z.string().describe('The product name'),
+      brand: z.string().optional(),
+      category: z.string().optional(),
+    }),
+    execute: async ({ nodeId, nodeName, brand, category }) => {
+      const researcher = getResearcherAgent();
+      return await researcher.researchItem({
+        nodeId,
+        nodeName,
+        brand,
+        category,
+        missingFields: ['brand', 'weight', 'price', 'category'],
+        priority: 0.8,
+      });
+    },
+  }),
 };
 
-/**
- * Chat message interface
- */
+// ============================================================================
+// Chat Message Interface
+// ============================================================================
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
+  toolCalls?: Array<{ tool: string; result: unknown }>;
 }
 
-/**
- * Chat response with potential tool calls
- */
 export interface ChatResponse {
   message: string;
-  toolCalls?: Array<{
-    tool: string;
-    result: unknown;
-  }>;
+  toolCalls?: Array<{ tool: string; result: unknown }>;
   suggestions?: string[];
 }
 
-/**
- * Head Gardener Agent - Interactive graph management interface
- */
+// ============================================================================
+// Head Gardener Agent - True LLM Reasoning
+// ============================================================================
+
 export class HeadGardenerAgent {
   private readonly name = 'head-gardener';
   private conversationHistory: ChatMessage[] = [];
   private readonly maxHistoryLength = 50;
 
   constructor() {
-    // Register with Mastra
     registerAgent(this.name, this);
   }
 
   /**
-   * Process a user chat message
+   * Process a user chat message using LLM tool-calling
    */
   async chat(userMessage: string): Promise<ChatResponse> {
     const timestamp = new Date().toISOString();
@@ -181,717 +330,114 @@ export class HeadGardenerAgent {
       timestamp,
     });
 
-    // Parse intent and route to appropriate tool
-    const intent = this.parseIntent(userMessage);
-    const toolCalls: Array<{ tool: string; result: unknown }> = [];
-
-    let response: string;
-
-    try {
-      switch (intent.type) {
-        case 'status_query':
-          const status = await TOOLS.getSystemStatus.execute();
-          toolCalls.push({ tool: 'getSystemStatus', result: status });
-          response = this.formatStatusResponse(status, intent.subject);
-          break;
-
-        case 'workflow_query':
-          if (intent.runId) {
-            const workflowStatus = await TOOLS.getWorkflowStatus.execute(intent.runId);
-            toolCalls.push({ tool: 'getWorkflowStatus', result: workflowStatus as unknown as Record<string, unknown> });
-            response = workflowStatus
-              ? this.formatWorkflowResponse(workflowStatus as unknown as Record<string, unknown>)
-              : `Workflow run ${intent.runId} not found.`;
-          } else {
-            const workflows = await TOOLS.listRecentWorkflows.execute({ limit: 5 });
-            toolCalls.push({ tool: 'listRecentWorkflows', result: workflows as unknown as Record<string, unknown> });
-            response = this.formatWorkflowListResponse({
-              runs: workflows.runs as unknown as Record<string, unknown>[],
-              total: workflows.total,
-            });
-          }
-          break;
-
-        case 'approval_query':
-          const approvals = await TOOLS.getPendingApprovals.execute({ limit: 10 });
-          toolCalls.push({ tool: 'getPendingApprovals', result: approvals as unknown as Record<string, unknown> });
-          response = this.formatApprovalsResponse({
-            decisions: approvals.decisions as unknown as Record<string, unknown>[],
-            total: approvals.total,
-          });
-          break;
-
-        case 'approval_action':
-          response = await this.handleApprovalAction(intent.approvalAction!, toolCalls);
-          break;
-
-        case 'audit_query':
-          const auditSummary = await TOOLS.getAuditSummary.execute();
-          toolCalls.push({ tool: 'getAuditSummary', result: auditSummary });
-          response = auditSummary;
-          break;
-
-        case 'health_query':
-          const health = await TOOLS.analyzeGraphHealth.execute();
-          toolCalls.push({ tool: 'analyzeGraphHealth', result: health });
-          response = this.formatHealthResponse(health);
-          break;
-
-        case 'supernode_query':
-          const supernodeReport = await TOOLS.detectSupernodes.execute();
-          toolCalls.push({ tool: 'detectSupernodes', result: supernodeReport });
-          response = supernodeReport;
-          break;
-
-        case 'graph_query':
-          if (intent.query) {
-            const queryResult = await TOOLS.queryGraph.execute(intent.query);
-            toolCalls.push({ tool: 'queryGraph', result: queryResult });
-            response = this.formatQueryResponse(queryResult);
-          } else {
-            response = 'Please provide a Cypher query. For safety, only read-only queries are allowed.';
-          }
-          break;
-
-        case 'trigger_workflow':
-          if (intent.workflowType) {
-            const triggerResult = await TOOLS.triggerWorkflow.execute(
-              intent.workflowType as 'morning-hygiene' | 'deep-deduplication' | 'gap-filling',
-              intent.scope
-            );
-            toolCalls.push({ tool: 'triggerWorkflow', result: triggerResult });
-            response = formatTriggerResponse(triggerResult);
-          } else {
-            const workflows = TOOLS.listAvailableWorkflows.execute();
-            response = `Please specify which workflow to run:\n\n${workflows
-              .map((w) => `- **${w.name}**: ${w.description}`)
-              .join('\n')}`;
-          }
-          break;
-
-        case 'enrichment_query':
-          const enrichmentStatus = await TOOLS.getEnrichmentStatus.execute();
-          toolCalls.push({ tool: 'getEnrichmentStatus', result: enrichmentStatus as unknown as Record<string, unknown> });
-          response = enrichmentStatus
-            ? this.formatEnrichmentResponse(enrichmentStatus as unknown as Record<string, unknown>)
-            : 'No enrichment status available.';
-          break;
-
-        case 'missing_data_query':
-          const missingData = await TOOLS.findMissingData.execute({ limit: 20 });
-          toolCalls.push({ tool: 'findMissingData', result: missingData });
-          response = this.formatMissingDataResponse(missingData);
-          break;
-
-        case 'help':
-          response = this.getHelpMessage();
-          break;
-
-        default:
-          response = this.handleUnknownIntent(userMessage);
-      }
-    } catch (error) {
-      response = `I encountered an error: ${error instanceof Error ? error.message : String(error)}. Please try again.`;
-    }
-
-    // Add assistant response to history
-    this.conversationHistory.push({
-      role: 'assistant',
-      content: response,
-      timestamp: new Date().toISOString(),
-    });
-
-    // Trim history if needed
-    if (this.conversationHistory.length > this.maxHistoryLength) {
-      this.conversationHistory = this.conversationHistory.slice(-this.maxHistoryLength);
-    }
-
-    // Save to memory
-    await this.saveToMemory();
-
-    return {
-      message: response,
-      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      suggestions: this.getSuggestions(intent.type),
-    };
-  }
-
-  /**
-   * Parse user intent from message
-   */
-  private parseIntent(message: string): {
-    type: 'status_query' | 'workflow_query' | 'approval_query' | 'approval_action' | 'audit_query' |
-          'health_query' | 'supernode_query' | 'graph_query' | 'trigger_workflow' |
-          'enrichment_query' | 'missing_data_query' | 'help' | 'unknown';
-    subject?: string;
-    runId?: string;
-    query?: string;
-    workflowType?: string;
-    scope?: { category?: string; brand?: string };
-    approvalAction?: {
-      decision: 'approve' | 'reject';
-      target: 'specific' | 'all' | 'range' | 'confidence';
-      approvalIds?: string[];
-      indices?: number[];
-      confidenceThreshold?: number;
-      notes?: string;
-    };
-  } {
-    const lowerMessage = message.toLowerCase();
-
-    // Help queries
-    if (lowerMessage.includes('help') || lowerMessage.includes('what can you')) {
-      return { type: 'help' };
-    }
-
-    // Check for trigger intent first (before workflow queries)
-    const triggerIntent = parseTriggerIntent(message);
-    if (triggerIntent.isTrigger && triggerIntent.workflowType) {
-      return {
-        type: 'trigger_workflow',
-        workflowType: triggerIntent.workflowType,
-        scope: triggerIntent.scope,
-      };
-    }
-
-    // Status queries
-    if (
-      lowerMessage.includes('status') ||
-      lowerMessage.includes('how are') ||
-      lowerMessage.includes('how is') ||
-      (lowerMessage.includes('what') && lowerMessage.includes('happening'))
-    ) {
-      let subject: string | undefined;
-      if (lowerMessage.includes('orphan')) subject = 'orphans';
-      if (lowerMessage.includes('duplicate')) subject = 'duplicates';
-      if (lowerMessage.includes('merge')) subject = 'merges';
-      return { type: 'status_query', subject };
-    }
-
-    // Workflow queries (status, not trigger)
-    if (
-      (lowerMessage.includes('workflow') || lowerMessage.includes('hygiene') || lowerMessage.includes('dedup')) &&
-      (lowerMessage.includes('status') || lowerMessage.includes('show') || lowerMessage.includes('list'))
-    ) {
-      // Check for specific run ID
-      const runIdMatch = message.match(/run[- ]?id[:\s]+(\S+)/i) ||
-                         message.match(/workflow[:\s]+(\S+)/i);
-      return { type: 'workflow_query', runId: runIdMatch?.[1] };
-    }
-
-    // Approval ACTIONS (approve/reject commands) - check before approval queries
-    const approveMatch = lowerMessage.match(/^(approve|accept|yes|confirm)/);
-    const rejectMatch = lowerMessage.match(/^(reject|deny|no|decline|skip)/);
-
-    if (approveMatch || rejectMatch) {
-      const decision = approveMatch ? 'approve' : 'reject';
-
-      // "approve all" / "reject all"
-      if (lowerMessage.includes(' all')) {
-        return {
-          type: 'approval_action',
-          approvalAction: { decision, target: 'all' },
-        };
-      }
-
-      // "approve first 5" / "reject first 3"
-      const firstNMatch = lowerMessage.match(/first\s+(\d+)/);
-      if (firstNMatch) {
-        const count = parseInt(firstNMatch[1], 10);
-        return {
-          type: 'approval_action',
-          approvalAction: {
-            decision,
-            target: 'range',
-            indices: Array.from({ length: count }, (_, i) => i),
-          },
-        };
-      }
-
-      // "approve 1, 2, 3" or "approve 1 2 3" or "approve #1 #2"
-      const numberMatches = message.match(/\d+/g);
-      if (numberMatches && numberMatches.length > 0) {
-        const indices = numberMatches.map((n) => parseInt(n, 10) - 1); // Convert to 0-indexed
-        return {
-          type: 'approval_action',
-          approvalAction: {
-            decision,
-            target: 'specific',
-            indices: indices.filter((i) => i >= 0),
-          },
-        };
-      }
-
-      // "approve above 90%" / "reject below 85%"
-      const confidenceMatch = lowerMessage.match(/(above|below|over|under|>=?|<=?)\s*(\d+)%?/);
-      if (confidenceMatch) {
-        const threshold = parseInt(confidenceMatch[2], 10) / 100;
-        const isAbove = ['above', 'over', '>', '>='].includes(confidenceMatch[1]);
-        return {
-          type: 'approval_action',
-          approvalAction: {
-            decision,
-            target: 'confidence',
-            confidenceThreshold: isAbove ? threshold : -threshold, // negative means below
-          },
-        };
-      }
-
-      // Just "approve" or "reject" with no specifier - approve/reject the first one
-      return {
-        type: 'approval_action',
-        approvalAction: {
-          decision,
-          target: 'specific',
-          indices: [0],
-        },
-      };
-    }
-
-    // Approval queries (show pending, not act on them)
-    if (
-      lowerMessage.includes('approval') ||
-      lowerMessage.includes('pending') ||
-      lowerMessage.includes('decision') ||
-      lowerMessage.includes('waiting')
-    ) {
-      return { type: 'approval_query' };
-    }
-
-    // Audit queries
-    if (
-      lowerMessage.includes('audit') ||
-      lowerMessage.includes('history') ||
-      lowerMessage.includes('log') ||
-      lowerMessage.includes('today') ||
-      lowerMessage.includes('yesterday') ||
-      (lowerMessage.includes('what') && lowerMessage.includes('did'))
-    ) {
-      return { type: 'audit_query' };
-    }
-
-    // Health queries
-    if (
-      lowerMessage.includes('health') ||
-      lowerMessage.includes('issue') ||
-      lowerMessage.includes('problem') ||
-      lowerMessage.includes('analyze')
-    ) {
-      return { type: 'health_query' };
-    }
-
-    // Supernode queries
-    if (
-      lowerMessage.includes('supernode') ||
-      lowerMessage.includes('anomaly') ||
-      lowerMessage.includes('high degree')
-    ) {
-      return { type: 'supernode_query' };
-    }
-
-    // Enrichment queries
-    if (
-      lowerMessage.includes('enrich') ||
-      lowerMessage.includes('gap-filling') ||
-      lowerMessage.includes('gap filling') ||
-      lowerMessage.includes('fill gaps')
-    ) {
-      return { type: 'enrichment_query' };
-    }
-
-    // Missing data queries
-    if (
-      lowerMessage.includes('missing') ||
-      lowerMessage.includes('incomplete') ||
-      lowerMessage.includes('empty fields') ||
-      lowerMessage.includes('need data')
-    ) {
-      return { type: 'missing_data_query' };
-    }
-
-    // Graph queries (Cypher)
-    if (
-      lowerMessage.includes('match') ||
-      lowerMessage.includes('return') ||
-      lowerMessage.startsWith('show me') ||
-      lowerMessage.includes('count')
-    ) {
-      // Extract Cypher if present
-      const cypherMatch = message.match(/```(?:cypher)?\s*([\s\S]*?)```/) ||
-                          message.match(/MATCH[\s\S]+RETURN[\s\S]+/i);
-      return { type: 'graph_query', query: cypherMatch?.[1] || cypherMatch?.[0] };
-    }
-
-    return { type: 'unknown' };
-  }
-
-  /**
-   * Format system status response
-   */
-  private formatStatusResponse(status: SystemStatus, subject?: string): string {
-    const lines: string[] = [];
-
-    lines.push(`**System Status: ${status.status}**\n`);
-    lines.push(`Database: ${status.memgraphConnected ? 'Connected' : 'Disconnected'}`);
-    lines.push(`Running workflows: ${status.workflowsRunning}`);
-    lines.push(`Pending approvals: ${status.pendingApprovals}`);
-
-    if (subject === 'orphans') {
-      lines.push(`\n**Orphans**: ${status.metrics.orphanCount} detected`);
-    } else if (subject === 'duplicates') {
-      lines.push(`\n**Duplicates**: ${status.metrics.duplicatesDetected} detected`);
-    } else if (subject === 'merges') {
-      lines.push(`\n**Merges (24h)**: ${status.metrics.mergesExecuted24h} executed`);
-    }
-
-    lines.push(`\nTotal nodes: ${status.metrics.totalNodes.toLocaleString()}`);
-    lines.push(`Total relationships: ${status.metrics.totalRelationships.toLocaleString()}`);
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Format workflow response
-   */
-  private formatWorkflowResponse(workflow: Record<string, unknown>): string {
-    return `**Workflow: ${workflow.workflowName}**
-Run ID: ${workflow.runId}
-Status: ${workflow.status}
-Started: ${workflow.startedAt}
-${workflow.completedAt ? `Completed: ${workflow.completedAt}` : ''}
-${workflow.error ? `Error: ${workflow.error}` : ''}`;
-  }
-
-  /**
-   * Format workflow list response
-   */
-  private formatWorkflowListResponse(result: { runs: Array<Record<string, unknown>>; total: number }): string {
-    if (result.runs.length === 0) {
-      return 'No workflow runs found.';
-    }
-
-    const lines = [`**Recent Workflows** (${result.total} total)\n`];
-    for (const run of result.runs) {
-      lines.push(`- ${run.workflowName}: ${run.status} (${run.startedAt})`);
-    }
-    return lines.join('\n');
-  }
-
-  /**
-   * Format approvals response
-   */
-  private formatApprovalsResponse(result: { decisions: Array<Record<string, unknown>>; total: number }): string {
-    if (result.total === 0) {
-      return 'No pending approvals. All caught up!';
-    }
-
-    const lines = [`**Pending Approvals** (${result.total} total)\n`];
-    for (const decision of result.decisions.slice(0, 5)) {
-      lines.push(`- ${decision.title} (${((decision.confidence as number) * 100).toFixed(0)}% confidence)`);
-      lines.push(`  Waiting: ${decision.waitingDays} days`);
-    }
-
-    if (result.total > 5) {
-      lines.push(`\n...and ${result.total - 5} more`);
-    }
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Format health response
-   */
-  private formatHealthResponse(health: { data: Record<string, unknown> }): string {
-    const data = health.data;
-    return `**Graph Health Summary**
-
-Total nodes: ${(data.totalNodes as number).toLocaleString()}
-Total relationships: ${(data.totalRelationships as number).toLocaleString()}
-
-**Issues:**
-- Orphans: ${data.orphanCount}
-- Supernodes: ${data.supernodeCount}
-- Bridge nodes: ${data.bridgeNodeCount}
-- Schema violations: ${data.schemaViolationCount}`;
-  }
-
-  /**
-   * Format query response
-   */
-  private formatQueryResponse(result: { rows: unknown[]; error?: string }): string {
-    if (result.error) {
-      return `Query error: ${result.error}`;
-    }
-
-    if (result.rows.length === 0) {
-      return 'Query returned no results.';
-    }
-
-    return `Query returned ${result.rows.length} results:\n\`\`\`json\n${JSON.stringify(result.rows.slice(0, 10), null, 2)}\n\`\`\``;
-  }
-
-  /**
-   * Format enrichment response
-   */
-  private formatEnrichmentResponse(result: Record<string, unknown>): string {
-    if (result.message) {
-      return result.message as string;
-    }
-
-    const summary = result.summary as Record<string, unknown> | null;
-    const lines = [
-      `**Enrichment Status: ${result.status}**`,
-      `Run ID: ${result.runId}`,
-      `Started: ${result.startedAt}`,
+    // Build messages for LLM
+    const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+      { role: 'system', content: SYSTEM_PROMPT },
     ];
 
-    if (result.completedAt) {
-      lines.push(`Completed: ${result.completedAt}`);
-    }
-
-    if (summary) {
-      lines.push('');
-      lines.push('**Results:**');
-      lines.push(`- Nodes enriched: ${summary.nodesEnriched || 0}`);
-      lines.push(`- Nodes skipped: ${summary.nodesSkipped || 0}`);
-      lines.push(`- Fields filled: ${summary.fieldsEnriched || 0}`);
-      if (summary.avgConfidence) {
-        lines.push(`- Avg confidence: ${((summary.avgConfidence as number) * 100).toFixed(1)}%`);
-      }
-    }
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Format missing data response
-   */
-  private formatMissingDataResponse(result: { count: number; nodes: Array<Record<string, unknown>> }): string {
-    if (result.count === 0) {
-      return 'No nodes with missing data found. Data is complete!';
-    }
-
-    const lines = [`**Nodes Needing Enrichment** (${result.count} found)\n`];
-
-    for (const node of result.nodes.slice(0, 10)) {
-      const missingFields = (node.missingFields as string[]).join(', ');
-      const priority = ((node.priority as number) * 100).toFixed(0);
-      lines.push(`- **${node.name}** (priority: ${priority}%)`);
-      lines.push(`  Missing: ${missingFields}`);
-    }
-
-    if (result.count > 10) {
-      lines.push(`\n...and ${result.count - 10} more`);
-    }
-
-    lines.push('\nRun "fill gaps" or "enrich data" to start gap-filling workflow.');
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Handle approval/rejection actions
-   */
-  private async handleApprovalAction(
-    action: {
-      decision: 'approve' | 'reject';
-      target: 'specific' | 'all' | 'range' | 'confidence';
-      approvalIds?: string[];
-      indices?: number[];
-      confidenceThreshold?: number;
-      notes?: string;
-    },
-    toolCalls: Array<{ tool: string; result: unknown }>
-  ): Promise<string> {
-    // First, get pending approvals
-    const pendingResult = await listPendingDecisions({ limit: 100 });
-    const pending = pendingResult.decisions;
-
-    if (pending.length === 0) {
-      return 'No pending approvals to process. All caught up!';
-    }
-
-    let toProcess: typeof pending = [];
-    let description = '';
-
-    switch (action.target) {
-      case 'all':
-        toProcess = pending;
-        description = `all ${pending.length} pending`;
-        break;
-
-      case 'specific':
-      case 'range':
-        if (action.indices && action.indices.length > 0) {
-          toProcess = action.indices
-            .filter((i) => i >= 0 && i < pending.length)
-            .map((i) => pending[i]!);
-          description = toProcess.length === 1
-            ? `item #${action.indices[0]! + 1}`
-            : `items #${action.indices.map((i) => i + 1).join(', #')}`;
-        }
-        break;
-
-      case 'confidence':
-        if (action.confidenceThreshold !== undefined) {
-          const threshold = Math.abs(action.confidenceThreshold);
-          const isAbove = action.confidenceThreshold > 0;
-          toProcess = pending.filter((p) =>
-            isAbove ? p.confidence >= threshold : p.confidence < threshold
-          );
-          description = `${toProcess.length} items ${isAbove ? 'above' : 'below'} ${(threshold * 100).toFixed(0)}% confidence`;
-        }
-        break;
-    }
-
-    if (toProcess.length === 0) {
-      return 'No matching approvals found for your criteria.';
-    }
-
-    // Confirm before processing
-    const lines: string[] = [];
-    lines.push(`**${action.decision === 'approve' ? 'Approving' : 'Rejecting'} ${description}:**\n`);
-
-    // Show what will be processed (max 5 for readability)
-    const preview = toProcess.slice(0, 5);
-    for (const item of preview) {
-      lines.push(`- ${item.title} (${(item.confidence * 100).toFixed(0)}% confidence)`);
-    }
-    if (toProcess.length > 5) {
-      lines.push(`...and ${toProcess.length - 5} more\n`);
-    }
-
-    // Process each approval
-    const results: Array<{ success: boolean; message: string }> = [];
-    for (const item of toProcess) {
-      const result = await handleApprovalDecision(item.approvalId, action.decision, action.notes);
-      results.push(result);
-      toolCalls.push({
-        tool: 'handleApprovalDecision',
-        result: { approvalId: item.approvalId, ...result },
+    // Add recent conversation history for context
+    const recentHistory = this.conversationHistory.slice(-10);
+    for (const msg of recentHistory) {
+      messages.push({
+        role: msg.role,
+        content: msg.content,
       });
     }
 
-    const succeeded = results.filter((r) => r.success).length;
-    const failed = results.filter((r) => !r.success).length;
+    const toolCalls: Array<{ tool: string; result: unknown }> = [];
 
-    lines.push(`\n**Results:**`);
-    lines.push(`${action.decision === 'approve' ? '✅ Approved' : '❌ Rejected'}: ${succeeded}`);
-    if (failed > 0) {
-      lines.push(`⚠️ Failed: ${failed}`);
+    try {
+      // Use LLM with tool calling
+      const result = await generateText({
+        model: anthropic('claude-sonnet-4-20250514'),
+        messages,
+        tools: headGardenerTools,
+        maxSteps: 5, // Allow multi-step tool usage
+      });
+
+      // Collect tool calls for response
+      for (const step of result.steps) {
+        for (const call of step.toolCalls) {
+          toolCalls.push({
+            tool: call.toolName,
+            result: call.args,
+          });
+        }
+      }
+
+      const response = result.text || 'I processed your request but have no additional comments.';
+
+      // Add assistant response to history
+      this.conversationHistory.push({
+        role: 'assistant',
+        content: response,
+        timestamp: new Date().toISOString(),
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      });
+
+      // Trim history if needed
+      if (this.conversationHistory.length > this.maxHistoryLength) {
+        this.conversationHistory = this.conversationHistory.slice(-this.maxHistoryLength);
+      }
+
+      // Save to memory
+      await this.saveToMemory();
+
+      return {
+        message: response,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        suggestions: this.getSuggestions(toolCalls),
+      };
+    } catch (error) {
+      const errorMessage = `I encountered an error: ${error instanceof Error ? error.message : String(error)}. Please try again.`;
+
+      this.conversationHistory.push({
+        role: 'assistant',
+        content: errorMessage,
+        timestamp: new Date().toISOString(),
+      });
+
+      return {
+        message: errorMessage,
+        suggestions: ['What is the system status?', 'Show pending approvals', 'Analyze graph health'],
+      };
     }
-
-    // Show remaining
-    const remaining = pendingResult.total - succeeded;
-    if (remaining > 0) {
-      lines.push(`\n${remaining} approvals still pending.`);
-    } else {
-      lines.push(`\nAll approvals processed! Queue is empty.`);
-    }
-
-    return lines.join('\n');
   }
 
   /**
-   * Handle unknown intent
+   * Get contextual suggestions based on recent tool calls
    */
-  private handleUnknownIntent(message: string): string {
-    return `I'm not sure how to help with "${message}". Here's what I can do:
+  private getSuggestions(toolCalls: Array<{ tool: string; result: unknown }>): string[] {
+    const lastTool = toolCalls[toolCalls.length - 1]?.tool;
 
-- **Status**: "What's the system status?" or "How many orphans today?"
-- **Workflows**: "Show recent workflows" or "Status of workflow run-123"
-- **Approvals**: "Show pending approvals" or "What needs my attention?"
-- **Approve/Reject**: "approve 1", "reject all", "approve above 90%"
-- **Audit**: "What happened today?" or "Show audit log"
-- **Health**: "Analyze graph health" or "Any issues?"
-
-Type "help" for more details.`;
-  }
-
-  /**
-   * Get help message
-   */
-  private getHelpMessage(): string {
-    return `**Head Gardener - Graph Management Assistant**
-
-I can help you manage and monitor the GearGraph. Here's what I can do:
-
-**System Status**
-- "What's the current status?"
-- "How many orphans/duplicates/merges today?"
-- "Is everything healthy?"
-
-**Workflow Management**
-- "Show recent workflows"
-- "What workflows are running?"
-- "Status of workflow run-123"
-
-**Pending Approvals** (view)
-- "Show pending approvals"
-- "What needs my attention?"
-- "Any decisions waiting?"
-
-**Approve/Reject Duplicates** (action)
-- "approve" / "reject" - first pending item
-- "approve 1" / "reject 2" - specific item by number
-- "approve 1, 2, 3" - multiple items
-- "approve first 5" - first N items
-- "approve all" / "reject all" - all pending
-- "approve above 90%" - by confidence threshold
-- "reject below 85%" - by confidence threshold
-
-**Audit & History**
-- "What happened today?"
-- "Show audit log"
-- "What did you do yesterday?"
-
-**Graph Analysis**
-- "Analyze graph health"
-- "Detect supernodes"
-- "Any anomalies?"
-
-**Data Enrichment**
-- "Show enrichment status"
-- "What's missing data?"
-- "Fill gaps" or "Run gap-filling"
-
-**Direct Queries** (read-only)
-- "MATCH (n:GearItem) RETURN count(n)"
-- "Show me all brands"`;
-  }
-
-  /**
-   * Get contextual suggestions
-   */
-  private getSuggestions(intentType: string): string[] {
-    switch (intentType) {
-      case 'status_query':
+    switch (lastTool) {
+      case 'getSystemStatus':
         return ['Show pending approvals', 'Analyze graph health', 'What happened today?'];
-      case 'workflow_query':
-        return ['Run hygiene check now', 'Show audit log', 'Any issues?'];
-      case 'approval_query':
-        return ['Approve 1', 'Approve all', 'Reject below 85%'];
-      case 'approval_action':
-        return ['Show pending approvals', 'Approve all', 'What happened today?'];
-      case 'health_query':
-        return ['Detect supernodes', 'Show pending approvals', 'Run hygiene check'];
-      case 'enrichment_query':
-        return ['What data is missing?', 'Run gap-filling', 'Show workflow status'];
-      case 'missing_data_query':
-        return ['Run gap-filling', 'Show enrichment status', 'Analyze health'];
+      case 'getPendingApprovals':
+        return ['Approve first item', 'Approve all above 90%', 'Show item details'];
+      case 'approveItems':
+      case 'rejectItems':
+        return ['Show remaining approvals', 'What happened today?', 'Check system status'];
+      case 'analyzeGraphHealth':
+        return ['Detect supernodes', 'Show orphans', 'Run morning hygiene'];
+      case 'triggerWorkflow':
+        return ['Check workflow status', 'Show recent workflows', 'What happened today?'];
+      case 'triageItems':
+        return ['Research high priority items', 'Show items needing enrichment', 'Run data quality workflow'];
+      case 'findMissingData':
+        return ['Run data quality workflow', 'Triage these items', 'Research specific item'];
       default:
-        return ['What\'s the status?', 'Show pending approvals', 'Analyze health'];
+        return ['What is the system status?', 'Show pending approvals', 'Analyze graph health'];
     }
   }
 
   /**
-   * Save conversation to LibSQL memory (T049)
+   * Save conversation to LibSQL memory
    */
   private async saveToMemory(): Promise<void> {
     const db = getLibSQLClient();
 
     try {
-      // Store last N messages in memory
       const recentMessages = this.conversationHistory.slice(-10);
 
       await db.execute({
@@ -907,7 +453,6 @@ I can help you manage and monitor the GearGraph. Here's what I can do:
         ],
       });
     } catch (error) {
-      // Memory save is non-critical, log but don't throw
       console.error('Failed to save conversation to memory:', error);
     }
   }
@@ -920,10 +465,7 @@ I can help you manage and monitor the GearGraph. Here's what I can do:
 
     try {
       const result = await db.execute({
-        sql: `
-          SELECT content FROM agent_memory
-          WHERE agent_name = ? AND memory_type = ?
-        `,
+        sql: `SELECT content FROM agent_memory WHERE agent_name = ? AND memory_type = ?`,
         args: [this.name, 'conversation_history'],
       });
 
@@ -951,9 +493,10 @@ I can help you manage and monitor the GearGraph. Here's what I can do:
   }
 }
 
-/**
- * System status interface
- */
+// ============================================================================
+// System Status
+// ============================================================================
+
 interface SystemStatus {
   status: 'healthy' | 'degraded' | 'unhealthy';
   memgraphConnected: boolean;
@@ -972,14 +515,10 @@ interface SystemStatus {
   timestamp: string;
 }
 
-/**
- * Get overall system status
- */
 async function getSystemStatus(): Promise<SystemStatus> {
   const client = getMemgraphClient();
   const db = getLibSQLClient();
 
-  // Check Memgraph connection
   let memgraphConnected = false;
   let totalNodes = 0;
   let totalRelationships = 0;
@@ -997,7 +536,6 @@ async function getSystemStatus(): Promise<SystemStatus> {
     totalNodes = nodeResult[0]?.count ?? 0;
     totalRelationships = relResult[0]?.count ?? 0;
 
-    // Get orphan count
     const analyst = getAnalystAgent();
     const orphanAnalysis = await analyst.analyzeOrphans();
     orphanCount = orphanAnalysis.data.orphanCount;
@@ -1005,27 +543,21 @@ async function getSystemStatus(): Promise<SystemStatus> {
     memgraphConnected = false;
   }
 
-  // Get workflow stats
   const workflowResult = await db.execute({
     sql: `SELECT COUNT(*) as count FROM workflow_runs WHERE status = 'running'`,
     args: [],
   });
   const workflowsRunning = (workflowResult.rows[0]?.count as number) ?? 0;
 
-  // Get pending approvals
   const approvalResult = await db.execute({
     sql: `SELECT COUNT(*) as count FROM approval_requests WHERE status = 'pending'`,
     args: [],
   });
   const pendingApprovals = (approvalResult.rows[0]?.count as number) ?? 0;
 
-  // Get latest runs
   const latestRuns = await getLatestRuns();
-
-  // Get 24h stats from audit log
   const auditSummary = await getTodaySummary();
 
-  // Determine overall status
   let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
   if (!memgraphConnected) {
     status = 'unhealthy';
@@ -1044,7 +576,7 @@ async function getSystemStatus(): Promise<SystemStatus> {
       totalNodes,
       totalRelationships,
       orphanCount,
-      duplicatesDetected: 0, // Would need to query
+      duplicatesDetected: 0,
       mergesExecuted24h: auditSummary.merges,
       deletions24h: auditSummary.deletes,
     },
@@ -1052,13 +584,13 @@ async function getSystemStatus(): Promise<SystemStatus> {
   };
 }
 
-/**
- * Execute a read-only query (FR-031)
- */
+// ============================================================================
+// Read-Only Query Execution
+// ============================================================================
+
 async function executeReadOnlyQuery(query: string): Promise<{ rows: unknown[]; error?: string }> {
   const client = getMemgraphClient();
 
-  // Validate query is read-only
   const normalizedQuery = query.trim().toUpperCase();
   const dangerousKeywords = [
     'CREATE', 'DELETE', 'DETACH', 'SET', 'REMOVE', 'MERGE',
@@ -1085,7 +617,10 @@ async function executeReadOnlyQuery(query: string): Promise<{ rows: unknown[]; e
   }
 }
 
-// Create singleton instance
+// ============================================================================
+// Singleton Instance
+// ============================================================================
+
 let headGardenerInstance: HeadGardenerAgent | null = null;
 
 export function getHeadGardenerAgent(): HeadGardenerAgent {

@@ -39,7 +39,7 @@ export async function findSimilarNodes(
     YIELD node, similarity
     WHERE similarity >= $minSimilarity
     RETURN
-      node.id AS nodeId,
+      node.gearId AS nodeId,
       node.name AS nodeName,
       similarity,
       properties(node) AS properties
@@ -88,13 +88,13 @@ export async function scanForDuplicates(): Promise<DuplicateScanResult> {
   // Get all nodes with embeddings
   const nodesQuery = `
     MATCH (n:GearItem)
-    WHERE n.embedding_vector IS NOT NULL
+    WHERE n.embedding_vector IS NOT NULL AND n.gearId IS NOT NULL
     RETURN
-      n.id AS nodeId,
+      n.gearId AS nodeId,
       n.name AS nodeName,
       n.embedding_vector AS embedding,
       properties(n) AS properties
-    ORDER BY n.id
+    ORDER BY n.gearId
   `;
 
   const nodes = await client.readOnlyQuery<{
@@ -243,13 +243,13 @@ export async function getNodeRelationships(
   const client = getMemgraphClient();
 
   const query = `
-    MATCH (n)-[r]->(target)
-    WHERE n.id = $nodeId
-    RETURN type(r) AS type, 'outgoing' AS direction, target.id AS targetId, target.name AS targetName
+    MATCH (n:GearItem)-[r]->(target)
+    WHERE n.gearId = $nodeId
+    RETURN type(r) AS type, 'outgoing' AS direction, target.gearId AS targetId, target.name AS targetName
     UNION
-    MATCH (source)-[r]->(n)
-    WHERE n.id = $nodeId
-    RETURN type(r) AS type, 'incoming' AS direction, source.id AS targetId, source.name AS targetName
+    MATCH (source)-[r]->(n:GearItem)
+    WHERE n.gearId = $nodeId
+    RETURN type(r) AS type, 'incoming' AS direction, source.gearId AS targetId, source.name AS targetName
   `;
 
   const results = await client.readOnlyQuery<{

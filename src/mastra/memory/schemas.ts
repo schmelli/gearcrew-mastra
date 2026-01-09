@@ -156,6 +156,50 @@ CREATE TABLE IF NOT EXISTS semantic_memory (
   metadata TEXT DEFAULT '{}'
 );
 
+-- Confidence Calibration Table (Phase 7: Learning System)
+CREATE TABLE IF NOT EXISTS confidence_calibration (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  historical_accuracy REAL NOT NULL DEFAULT 0.5,
+  sample_size INTEGER NOT NULL DEFAULT 0,
+  adjusted_threshold REAL NOT NULL DEFAULT 0.85,
+  last_updated TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(agent_id, action_type)
+);
+
+-- Enhanced Episodic Memory Table (replaces basic version)
+DROP TABLE IF EXISTS episodic_memory;
+CREATE TABLE IF NOT EXISTS episodic_memory (
+  id TEXT PRIMARY KEY,
+  timestamp TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  entity_name TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  decision TEXT NOT NULL CHECK(decision IN ('auto_approved', 'human_approved', 'human_rejected', 'skipped')),
+  workflow_run_id TEXT,
+  confidence REAL,
+  reasoning TEXT,
+  outcome_successful INTEGER,
+  outcome_notes TEXT,
+  metadata TEXT DEFAULT '{}'
+);
+
+-- Semantic Patterns Table (for learned conventions)
+CREATE TABLE IF NOT EXISTS semantic_patterns (
+  id TEXT PRIMARY KEY,
+  pattern_type TEXT NOT NULL CHECK(pattern_type IN ('brand_convention', 'category_default', 'naming_pattern', 'relationship_rule', 'field_inference')),
+  condition_field TEXT NOT NULL,
+  condition_value TEXT NOT NULL,
+  inference_field TEXT NOT NULL,
+  inference_value TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.5,
+  supporting_evidence INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_type ON workflow_runs(workflow_type);
@@ -165,9 +209,13 @@ CREATE INDEX IF NOT EXISTS idx_correction_rules_active ON correction_rules(activ
 CREATE INDEX IF NOT EXISTS idx_correction_rules_type ON correction_rules(rule_type);
 CREATE INDEX IF NOT EXISTS idx_gardening_issues_status ON gardening_issues(status);
 CREATE INDEX IF NOT EXISTS idx_gardening_issues_type ON gardening_issues(type);
-CREATE INDEX IF NOT EXISTS idx_episodic_memory_type ON episodic_memory(type);
+CREATE INDEX IF NOT EXISTS idx_episodic_memory_type ON episodic_memory(action_type);
 CREATE INDEX IF NOT EXISTS idx_episodic_memory_timestamp ON episodic_memory(timestamp);
+CREATE INDEX IF NOT EXISTS idx_episodic_memory_entity ON episodic_memory(entity_name);
 CREATE INDEX IF NOT EXISTS idx_semantic_memory_category ON semantic_memory(category);
+CREATE INDEX IF NOT EXISTS idx_confidence_calibration_agent ON confidence_calibration(agent_id, action_type);
+CREATE INDEX IF NOT EXISTS idx_semantic_patterns_type ON semantic_patterns(pattern_type);
+CREATE INDEX IF NOT EXISTS idx_semantic_patterns_condition ON semantic_patterns(condition_field, condition_value);
 `;
 
 /**

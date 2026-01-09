@@ -38,6 +38,7 @@ interface MorningHygieneOutput {
   deletedOrphans: string[];
   flaggedOrphans: string[];
   schemaViolations: number;
+  brandInNameFixed: number;
   duration: number;
 }
 
@@ -236,6 +237,110 @@ async function validateSchema(
   };
 }
 
+/**
+ * Step 5: Fix brand names redundantly included in product names
+ * Detects and fixes cases like "Fjällräven Abisko Pants" -> "Abisko Pants"
+ */
+async function fixBrandInNames(
+  workflowRunId: string,
+  dryRun: boolean
+): Promise<{ fixedCount: number; fixedItems: Array<{ id: string; oldName: string; newName: string }> }> {
+  const client = getMemgraphClient();
+  const auditLogger = getAuditLogger();
+  const fixedItems: Array<{ id: string; oldName: string; newName: string }> = [];
+
+  // Find all items where name starts with brand name
+  // Use internal node ID as fallback for nodes without explicit id/gearId
+  const detectQuery = `
+    MATCH (g:GearItem)
+    WHERE g.brand IS NOT NULL
+      AND g.name IS NOT NULL
+      AND g.name STARTS WITH g.brand
+      AND size(g.name) > size(g.brand)
+    RETURN id(g) AS internalId, g.id AS id, g.gearId AS gearId, g.brand AS brand, g.name AS oldName
+  `;
+
+  const itemsToFix = await client.readOnlyQuery<{
+    internalId: number;
+    id: string | null;
+    gearId: string | null;
+    brand: string;
+    oldName: string;
+  }>(detectQuery);
+
+  for (const item of itemsToFix) {
+    try {
+      // Calculate cleaned name (strip brand prefix and trim)
+      const brandLength = item.brand.length;
+      let newName = item.oldName.substring(brandLength).trim();
+
+      // Handle cases where there might be extra separators like " - " or ": "
+      if (newName.startsWith('-') || newName.startsWith(':')) {
+        newName = newName.substring(1).trim();
+      }
+
+      // Skip if new name would be empty or too short
+      if (newName.length < 2) {
+        continue;
+      }
+
+      // Use explicit ID if available, otherwise use internal ID
+      const nodeId = item.id ?? item.gearId;
+      const displayId = nodeId ?? `internal:${item.internalId}`;
+
+      if (!dryRun) {
+        // Apply the fix using internal ID for reliability
+        const fixQuery = `
+          MATCH (g:GearItem)
+          WHERE id(g) = $internalId
+          SET g.name = $newName
+          RETURN g.name AS updatedName
+        `;
+        await client.writeTransaction(fixQuery, { internalId: item.internalId, newName });
+
+        // Log to audit trail
+        await auditLogger.logUpdate(
+          workflowRunId,
+          'morning-hygiene',
+          displayId,
+          'GearItem',
+          { name: item.oldName },
+          { name: newName },
+          {
+            confidence: 1.0,
+            reasoning: `Auto-fixed: Removed redundant brand "${item.brand}" from product name`,
+          }
+        );
+      }
+
+      fixedItems.push({
+        id: displayId,
+        oldName: item.oldName,
+        newName,
+      });
+    } catch (error) {
+      console.error(`Failed to fix brand-in-name for ${item.id ?? item.gearId ?? item.internalId}:`, error);
+      await auditLogger.logError(
+        workflowRunId,
+        'morning-hygiene',
+        item.id ?? item.gearId ?? `internal:${item.internalId}`,
+        'GearItem',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  // Log summary if items were fixed
+  if (fixedItems.length > 0) {
+    console.info(`Fixed ${fixedItems.length} items with brand name in product name`);
+  }
+
+  return {
+    fixedCount: fixedItems.length,
+    fixedItems,
+  };
+}
+
 // ============================================================================
 // Main Workflow Execution
 // ============================================================================
@@ -273,12 +378,18 @@ export async function executeMorningHygieneWorkflow(
     // Step 4: Validate schema
     const { violationCount, autoFixedCount } = await validateSchema(workflowRunId);
 
+    // Step 5: Fix brand names in product names
+    const { fixedCount: brandInNameFixed, fixedItems: brandFixedItems } = await fixBrandInNames(
+      workflowRunId,
+      dryRun
+    );
+
     // Generate statistics
     const duration = Date.now() - startTime;
     const statistics: WorkflowStatistics = {
-      itemsProcessed: orphanAnalysis.orphanCount,
-      issuesDetected: orphanAnalysis.orphanCount + violationCount,
-      autoFixed: deletedIds.length + autoFixedCount,
+      itemsProcessed: orphanAnalysis.orphanCount + brandFixedItems.length,
+      issuesDetected: orphanAnalysis.orphanCount + violationCount + brandInNameFixed,
+      autoFixed: deletedIds.length + autoFixedCount + brandInNameFixed,
       flaggedForReview: flaggedIds.length,
       errors: 0,
     };
@@ -290,6 +401,7 @@ export async function executeMorningHygieneWorkflow(
       deletedOrphans: deletedIds,
       flaggedOrphans: flaggedIds,
       schemaViolations: violationCount,
+      brandInNameFixed,
       duration,
     };
 
@@ -298,6 +410,7 @@ export async function executeMorningHygieneWorkflow(
       flagged: flaggedIds.length,
       schemaViolations: violationCount,
       autoFixed: autoFixedCount,
+      brandInNameFixed,
     });
 
     return output;
@@ -318,6 +431,7 @@ export async function executeMorningHygieneWorkflow(
       deletedOrphans: [],
       flaggedOrphans: [],
       schemaViolations: 0,
+      brandInNameFixed: 0,
       duration,
     };
   }

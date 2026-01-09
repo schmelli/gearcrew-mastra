@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { getLibSQLClient } from '@/mastra/index';
 import { executeMorningHygieneWorkflow } from '../../workflows/morning-hygiene';
 import { executeDeduplicationWorkflow } from '../../workflows/deep-deduplication';
+import { executeEmbeddingWorkflow } from '../../workflows/embedding-generation';
+import { executeDataQualityWorkflow } from '../../workflows/data-quality';
 
 export const WorkflowScopeSchema = z.object({
   category: z.string().optional(),
@@ -61,14 +63,15 @@ export async function isWorkflowRunning(workflowName: string): Promise<{
  * Trigger a workflow manually
  */
 export async function triggerWorkflow(
-  workflowName: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling',
+  workflowName: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling' | 'embedding-generation' | 'data-quality',
   options?: {
     scope?: WorkflowScope;
     priority?: 'normal' | 'high';
     triggeredBy?: string;
+    workflowOptions?: Record<string, unknown>;
   }
 ): Promise<TriggerResult> {
-  const { scope, priority = 'normal', triggeredBy = 'admin' } = options ?? {};
+  const { scope, priority = 'normal', triggeredBy = 'admin', workflowOptions } = options ?? {};
 
   // Check if already running
   const runningCheck = await isWorkflowRunning(workflowName);
@@ -111,7 +114,7 @@ export async function triggerWorkflow(
     });
 
     // Execute workflow asynchronously based on type
-    executeWorkflowAsync(workflowName, runId, scope);
+    executeWorkflowAsync(workflowName, runId, scope, workflowOptions);
 
     return {
       runId,
@@ -140,7 +143,8 @@ export async function triggerWorkflow(
 async function executeWorkflowAsync(
   workflowName: string,
   runId: string,
-  scope?: WorkflowScope
+  scope?: WorkflowScope,
+  workflowOptions?: Record<string, unknown>
 ): Promise<void> {
   const db = getLibSQLClient();
 
@@ -157,6 +161,19 @@ async function executeWorkflowAsync(
       case 'gap-filling':
         // Gap-filling workflow will be implemented in Phase 7
         throw new Error('Gap-filling workflow not yet implemented');
+
+      case 'embedding-generation':
+        await executeEmbeddingWorkflow({ workflowRunId: runId });
+        break;
+
+      case 'data-quality':
+        await executeDataQualityWorkflow({
+          workflowRunId: runId,
+          tasks: (workflowOptions?.tasks as Array<'productFamilies' | 'genericCleanup'>) ?? ['productFamilies', 'genericCleanup'],
+          dryRun: (workflowOptions?.dryRun as boolean) ?? false,
+          limit: (workflowOptions?.limit as number) ?? 100,
+        });
+        break;
 
       default:
         throw new Error(`Unknown workflow: ${workflowName}`);
@@ -198,6 +215,18 @@ export function getAvailableWorkflows(): Array<{
       schedule: 'On-demand or when nodes flagged incomplete',
       supportsScope: true,
     },
+    {
+      name: 'embedding-generation',
+      description: 'Generates vector embeddings for GearItem nodes to enable semantic duplicate detection',
+      schedule: 'On-demand (required before deep-deduplication)',
+      supportsScope: false,
+    },
+    {
+      name: 'data-quality',
+      description: 'Detects product families and cleans up generic items without proper brands',
+      schedule: 'On-demand',
+      supportsScope: false,
+    },
   ];
 }
 
@@ -206,7 +235,7 @@ export function getAvailableWorkflows(): Array<{
  */
 export function parseTriggerIntent(message: string): {
   isTrigger: boolean;
-  workflowType?: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling';
+  workflowType?: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling' | 'embedding-generation';
   scope?: WorkflowScope;
   immediate?: boolean;
 } {
@@ -221,7 +250,7 @@ export function parseTriggerIntent(message: string): {
   }
 
   // Determine workflow type
-  let workflowType: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling' | undefined;
+  let workflowType: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling' | 'embedding-generation' | undefined;
 
   if (lowerMessage.includes('hygiene') || lowerMessage.includes('cleanup') || lowerMessage.includes('orphan')) {
     workflowType = 'morning-hygiene';
@@ -229,6 +258,8 @@ export function parseTriggerIntent(message: string): {
     workflowType = 'deep-deduplication';
   } else if (lowerMessage.includes('gap') || lowerMessage.includes('enrich') || lowerMessage.includes('fill')) {
     workflowType = 'gap-filling';
+  } else if (lowerMessage.includes('embed') || lowerMessage.includes('vector')) {
+    workflowType = 'embedding-generation';
   }
 
   // Check for immediate execution

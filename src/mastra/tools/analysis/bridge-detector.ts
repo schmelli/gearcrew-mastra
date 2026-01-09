@@ -141,7 +141,7 @@ async function fullBetweennessAnalysis(
     ORDER BY betweenness_centrality DESC
     LIMIT ${limit || 50}
     RETURN
-      node.id as nodeId,
+      node.gearId as nodeId,
       node.name as nodeName,
       labels(node)[0] as nodeLabel,
       betweenness_centrality,
@@ -197,24 +197,19 @@ async function sampledBetweennessAnalysis(
 }> {
   const client = getMemgraphClient();
 
-  // Sample high-degree nodes as potential bridges
+  // Sample high-degree nodes as potential bridges using degree-based heuristic
+  // Memgraph doesn't support Neo4j's shortestPath(), so we use degree as a proxy
   const query = `
     MATCH (n${nodeLabel ? `:${nodeLabel}` : ''})
     WITH n, size((n)--()) as degree
+    WHERE degree > 1
     ORDER BY degree DESC
-    LIMIT ${BRIDGE_CONFIG.sampleSize}
-    WITH collect(n) as sample
-    UNWIND sample as node
-    OPTIONAL MATCH path = shortestPath((node)-[*..3]-(other))
-    WHERE other IN sample AND node <> other
-    WITH node, count(path) as pathCount, size((node)--()) as degree
-    ORDER BY pathCount DESC
     LIMIT ${limit || 50}
     RETURN
-      node.id as nodeId,
-      node.name as nodeName,
-      labels(node)[0] as nodeLabel,
-      toFloat(pathCount) / 1000 as approxBetweenness,
+      n.gearId as nodeId,
+      n.name as nodeName,
+      labels(n)[0] as nodeLabel,
+      toFloat(degree) / 100.0 as approxBetweenness,
       degree
   `;
 
@@ -273,7 +268,7 @@ async function degreeBasedApproximation(
     ORDER BY degree DESC
     LIMIT ${limit || 50}
     RETURN
-      n.id as nodeId,
+      n.gearId as nodeId,
       n.name as nodeName,
       labels(n)[0] as nodeLabel,
       degree,
@@ -335,16 +330,15 @@ function calculateBridgeThreshold(nodes: BridgeNode[]): number {
 export async function checkIfBridgeNode(nodeId: string): Promise<BridgeCheckResult> {
   const client = getMemgraphClient();
 
-  // Get node's betweenness centrality
+  // Get node's connectivity using degree as a proxy for bridge detection
+  // Memgraph doesn't support Neo4j's shortestPath(), so we use degree heuristic
   const query = `
-    MATCH (n {id: $nodeId})
+    MATCH (n:GearItem {gearId: $nodeId})
     WITH n, size((n)--()) as degree
-    OPTIONAL MATCH path = shortestPath((n)-[*..2]-(other))
-    WITH n, degree, count(path) as pathCount
     RETURN
-      n.id as nodeId,
+      n.gearId as nodeId,
       degree,
-      toFloat(pathCount) / 100.0 as approxBetweenness
+      toFloat(degree) / 10.0 as approxBetweenness
   `;
 
   const results = await client.readOnlyQuery<{

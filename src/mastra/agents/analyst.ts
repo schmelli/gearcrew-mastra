@@ -17,6 +17,41 @@ export interface AnalysisResult<T> {
   duration: number;
 }
 
+// ============================================================================
+// Triage System Types
+// ============================================================================
+
+export interface FlaggedItem {
+  nodeId: string;
+  name: string;
+  brand?: string;
+  category?: string;
+  flagReason: string;
+  flaggedAt?: string;
+}
+
+export interface TriageResult {
+  itemId: string;
+  itemName: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  priorityScore: number; // 0-100
+  recommendedAction: 'research' | 'delete' | 'review' | 'skip';
+  factors: {
+    centrality: number;     // 0-40 pts
+    dataCompleteness: number; // 0-30 pts
+    staleness: number;      // 0-20 pts
+    isOrphan: number;       // 0-10 pts
+  };
+  reasoning: string;
+}
+
+export interface CompletenessResult {
+  nodeId: string;
+  score: number; // 0-1
+  missingFields: string[];
+  presentFields: string[];
+}
+
 /**
  * Analyst Agent - Pure algorithmic analysis, no LLM
  * Handles graph structure analysis using MAGE algorithms
@@ -259,11 +294,14 @@ export class AnalystAgent {
     }
 
     // Check for missing brand references
+    // Using OPTIONAL MATCH instead of EXISTS for Memgraph compatibility
     const brandQuery = `
       MATCH (n:GearItem)
       WHERE n.brand_id IS NOT NULL
-        AND NOT EXISTS((n)-[:MANUFACTURED_BY]->(:OutdoorBrand))
-      RETURN n.id AS nodeId, n.name AS nodeName, n.brand_id AS brandId
+      OPTIONAL MATCH (n)-[:MANUFACTURED_BY]->(brand:OutdoorBrand)
+      WITH n, brand
+      WHERE brand IS NULL
+      RETURN n.gearId AS nodeId, n.name AS nodeName, n.brand_id AS brandId
     `;
     const brandResults = await this.client.readOnlyQuery<{
       nodeId: string;
@@ -340,6 +378,318 @@ export class AnalystAgent {
       executedAt: new Date().toISOString(),
       duration: Date.now() - startTime,
     };
+  }
+
+  // ============================================================================
+  // Triage System Methods
+  // ============================================================================
+
+  /**
+   * Triage flagged items to determine priority and recommended action
+   * Priority Scoring Algorithm:
+   * - centrality (0-40 pts): Node degree / max degree in graph
+   * - dataCompleteness (0-30 pts): Based on missing fields
+   * - staleness (0-20 pts): Days since last update
+   * - isOrphan (0-10 pts): Isolated vs connected
+   */
+  async triageFlaggedItems(flags: FlaggedItem[]): Promise<TriageResult[]> {
+    if (flags.length === 0) return [];
+
+    const results: TriageResult[] = [];
+
+    // Get max degree for normalization
+    const maxDegreeQuery = `
+      MATCH (n:GearItem)
+      RETURN max(size((n)--()) ) AS maxDegree
+    `;
+    const maxDegreeResult = await this.client.readOnlyQuery<{ maxDegree: number }>(maxDegreeQuery);
+    const maxDegree = maxDegreeResult[0]?.maxDegree ?? 1;
+
+    // Process each flagged item
+    for (const flag of flags) {
+      const triageResult = await this.triageSingleItem(flag, maxDegree);
+      results.push(triageResult);
+    }
+
+    // Sort by priority score (highest first)
+    return results.sort((a, b) => b.priorityScore - a.priorityScore);
+  }
+
+  /**
+   * Triage a single flagged item
+   */
+  private async triageSingleItem(flag: FlaggedItem, maxDegree: number): Promise<TriageResult> {
+    // Get node details
+    const nodeQuery = `
+      MATCH (n:GearItem {id: $nodeId})
+      OPTIONAL MATCH (n)--()
+      WITH n, count(*) as degree
+      RETURN
+        n.id as nodeId,
+        n.name as name,
+        n.brand as brand,
+        n.weight_grams as weight,
+        n.price_usd as price,
+        n.category as category,
+        n.last_enriched_at as lastEnrichedAt,
+        n.createdAt as createdAt,
+        degree
+    `;
+
+    const nodeResults = await this.client.readOnlyQuery<{
+      nodeId: string;
+      name: string;
+      brand: string | null;
+      weight: number | null;
+      price: number | null;
+      category: string | null;
+      lastEnrichedAt: string | null;
+      createdAt: string | null;
+      degree: number;
+    }>(nodeQuery, { nodeId: flag.nodeId });
+
+    const node = nodeResults[0];
+
+    if (!node) {
+      // Node not found
+      return {
+        itemId: flag.nodeId,
+        itemName: flag.name,
+        priority: 'low',
+        priorityScore: 0,
+        recommendedAction: 'skip',
+        factors: { centrality: 0, dataCompleteness: 0, staleness: 0, isOrphan: 0 },
+        reasoning: 'Node not found in graph',
+      };
+    }
+
+    // Calculate factors
+
+    // 1. Centrality (0-40 pts): Node degree normalized
+    const centralityScore = Math.round((node.degree / maxDegree) * 40);
+
+    // 2. Data completeness (0-30 pts): Based on important fields
+    const completeness = await this.calculateCompleteness(flag.nodeId);
+    // Inverse: more missing = higher priority = higher score
+    const completenessScore = Math.round((1 - completeness.score) * 30);
+
+    // 3. Staleness (0-20 pts): Days since last update
+    const lastUpdate = node.lastEnrichedAt || node.createdAt;
+    let stalenessScore = 0;
+    if (lastUpdate) {
+      const daysSinceUpdate = Math.floor(
+        (Date.now() - new Date(lastUpdate).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      // Max score at 30+ days
+      stalenessScore = Math.min(Math.round((daysSinceUpdate / 30) * 20), 20);
+    } else {
+      // No update date = very stale
+      stalenessScore = 20;
+    }
+
+    // 4. IsOrphan (0-10 pts): Isolated = higher priority
+    const isOrphanScore = node.degree <= 1 ? 10 : node.degree <= 3 ? 5 : 0;
+
+    // Total score
+    const priorityScore = centralityScore + completenessScore + stalenessScore + isOrphanScore;
+
+    // Determine priority level
+    let priority: 'critical' | 'high' | 'medium' | 'low';
+    if (priorityScore >= 70) {
+      priority = 'critical';
+    } else if (priorityScore >= 50) {
+      priority = 'high';
+    } else if (priorityScore >= 30) {
+      priority = 'medium';
+    } else {
+      priority = 'low';
+    }
+
+    // Determine recommended action
+    let recommendedAction: 'research' | 'delete' | 'review' | 'skip';
+    let reasoning: string;
+
+    if (node.degree === 0 && completeness.score < 0.3) {
+      // Isolated and very incomplete - delete candidate
+      recommendedAction = 'delete';
+      reasoning = `Orphan node with low completeness (${Math.round(completeness.score * 100)}%). Safe to delete.`;
+    } else if (completeness.missingFields.length > 0 && centralityScore > 20) {
+      // Well-connected but incomplete - research candidate
+      recommendedAction = 'research';
+      reasoning = `High centrality node missing: ${completeness.missingFields.join(', ')}. Worth enriching.`;
+    } else if (flag.flagReason.includes('generic') || flag.flagReason.includes('no brand')) {
+      // Generic items need research to verify
+      recommendedAction = 'research';
+      reasoning = `Flagged as generic. Research needed to verify or delete.`;
+    } else if (centralityScore > 30) {
+      // Very high centrality - manual review
+      recommendedAction = 'review';
+      reasoning = `High-impact node (degree: ${node.degree}). Manual review recommended.`;
+    } else if (completeness.score >= 0.8) {
+      // Mostly complete, low centrality - skip
+      recommendedAction = 'skip';
+      reasoning = `Already ${Math.round(completeness.score * 100)}% complete with low impact.`;
+    } else {
+      // Default to research
+      recommendedAction = 'research';
+      reasoning = `Missing ${completeness.missingFields.length} fields. Research recommended.`;
+    }
+
+    return {
+      itemId: flag.nodeId,
+      itemName: node.name || flag.name,
+      priority,
+      priorityScore,
+      recommendedAction,
+      factors: {
+        centrality: centralityScore,
+        dataCompleteness: completenessScore,
+        staleness: stalenessScore,
+        isOrphan: isOrphanScore,
+      },
+      reasoning,
+    };
+  }
+
+  /**
+   * Calculate data completeness for a node
+   */
+  async calculateCompleteness(nodeId: string): Promise<CompletenessResult> {
+    const query = `
+      MATCH (n:GearItem {id: $nodeId})
+      RETURN
+        n.name as name,
+        n.brand as brand,
+        n.weight_grams as weight,
+        n.price_usd as price,
+        n.category as category,
+        n.description as description,
+        n.materials as materials,
+        n.colors as colors,
+        n.dimensions_cm as dimensions
+    `;
+
+    const results = await this.client.readOnlyQuery<Record<string, unknown>>(query, { nodeId });
+    const node = results[0];
+
+    if (!node) {
+      return {
+        nodeId,
+        score: 0,
+        missingFields: ['node_not_found'],
+        presentFields: [],
+      };
+    }
+
+    // Define important fields with weights
+    const fieldWeights: Record<string, number> = {
+      name: 0.15,
+      brand: 0.20,
+      weight: 0.15,
+      price: 0.15,
+      category: 0.10,
+      description: 0.10,
+      materials: 0.05,
+      colors: 0.05,
+      dimensions: 0.05,
+    };
+
+    const missingFields: string[] = [];
+    const presentFields: string[] = [];
+    let score = 0;
+
+    for (const [field, weight] of Object.entries(fieldWeights)) {
+      const value = node[field];
+      if (value !== null && value !== undefined && value !== '') {
+        presentFields.push(field);
+        score += weight;
+      } else {
+        missingFields.push(field);
+      }
+    }
+
+    return {
+      nodeId,
+      score: Math.min(score, 1), // Cap at 1
+      missingFields,
+      presentFields,
+    };
+  }
+
+  /**
+   * Find items that need enrichment based on completeness and centrality
+   */
+  async findItemsNeedingEnrichment(options?: {
+    limit?: number;
+    minCentrality?: number;
+    maxCompleteness?: number;
+  }): Promise<Array<FlaggedItem & { completeness: number; degree: number }>> {
+    const { limit = 50, minCentrality = 0, maxCompleteness = 0.7 } = options || {};
+
+    const query = `
+      MATCH (n:GearItem)
+      WITH n, size((n)--()) as degree
+      WHERE degree >= $minCentrality
+      RETURN
+        n.id as nodeId,
+        n.name as name,
+        n.brand as brand,
+        n.category as category,
+        n.weight_grams as weight,
+        n.price_usd as price,
+        n.description as description,
+        degree
+      ORDER BY degree DESC
+      LIMIT $limit
+    `;
+
+    const results = await this.client.readOnlyQuery<{
+      nodeId: string;
+      name: string;
+      brand: string | null;
+      category: string | null;
+      weight: number | null;
+      price: number | null;
+      description: string | null;
+      degree: number;
+    }>(query, { minCentrality, limit: limit * 2 }); // Get extra to filter
+
+    const items: Array<FlaggedItem & { completeness: number; degree: number }> = [];
+
+    for (const r of results) {
+      // Quick completeness calculation
+      let presentCount = 0;
+      if (r.name) presentCount++;
+      if (r.brand) presentCount++;
+      if (r.weight) presentCount++;
+      if (r.price) presentCount++;
+      if (r.category) presentCount++;
+      if (r.description) presentCount++;
+
+      const completeness = presentCount / 6;
+
+      if (completeness <= maxCompleteness) {
+        const missingFields: string[] = [];
+        if (!r.brand) missingFields.push('brand');
+        if (!r.weight) missingFields.push('weight');
+        if (!r.price) missingFields.push('price');
+        if (!r.category) missingFields.push('category');
+
+        items.push({
+          nodeId: r.nodeId,
+          name: r.name || 'Unknown',
+          brand: r.brand ?? undefined,
+          category: r.category ?? undefined,
+          flagReason: `Incomplete data (${Math.round(completeness * 100)}%): missing ${missingFields.join(', ')}`,
+          completeness,
+          degree: r.degree,
+        });
+      }
+
+      if (items.length >= limit) break;
+    }
+
+    return items;
   }
 }
 

@@ -135,6 +135,7 @@ describe('Chat Status Query - Integration Test', () => {
           'morning-hygiene': 5,
           'deep-deduplication': 4,
           'gap-filling': 1,
+          'embedding-generation': 0,
           manual: 0,
         },
         uniqueEntities: 8,

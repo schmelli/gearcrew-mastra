@@ -128,11 +128,14 @@ export function getLibSQLClient(): ReturnType<typeof createClient> {
 }
 
 // ============================================================================
-// Shared Memory Context (FR-018)
+// Shared Memory Context (FR-018) with Learning System (Phase 7)
 // ============================================================================
+
+import type * as LearningModule from './memory/learning';
 
 export interface SharedMemoryContext {
   correctionRules: CorrectionRulesManager;
+  learning: typeof LearningModule;
   sessionId: string;
   startedAt: string;
 }
@@ -142,13 +145,16 @@ let sharedMemory: SharedMemoryContext | null = null;
 /**
  * Get or create shared memory context for agents (FR-018)
  * This provides a unified memory context that all agents can access
+ * Now includes the Phase 7 Learning System
  */
 export async function getSharedMemoryContext(): Promise<SharedMemoryContext> {
   if (!sharedMemory) {
-    // Dynamic import to avoid circular dependency and build-time initialization
+    // Dynamic imports to avoid circular dependency and build-time initialization
     const { getCorrectionRulesManager } = await import('./memory/correction-rules');
+    const learning = await import('./memory/learning');
     sharedMemory = {
       correctionRules: getCorrectionRulesManager(),
+      learning,
       sessionId: `session-${Date.now()}`,
       startedAt: new Date().toISOString(),
     };
