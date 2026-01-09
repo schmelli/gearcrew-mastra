@@ -364,11 +364,13 @@ export class HeadGardenerAgent {
 
       // Use LLM with tool calling
       // Note: Using deepseek-chat as deepseek-reasoner doesn't support tool calling
+      // TODO: Re-enable tools once DeepSeek integration is confirmed working
       const result = await generateText({
         model: deepseek('deepseek-chat'),
         messages,
-        tools: headGardenerTools,
-        maxSteps: 5, // Allow multi-step tool usage
+        // Temporarily disable tools to test basic connection
+        // tools: headGardenerTools,
+        // maxSteps: 5,
       });
 
       console.log('Head Gardener: Received response', {
