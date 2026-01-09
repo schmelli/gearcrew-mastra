@@ -150,30 +150,51 @@ async function flagOrphans(
   for (const orphan of recommendations.toFlag) {
     try {
       // Fetch actual node data from Memgraph for context
+      // Use COALESCE to get a meaningful name from different node types
       const nodeQuery = `
         MATCH (n)
         WHERE n.id = $nodeId OR toString(id(n)) = $nodeId
         OPTIONAL MATCH (n)-[r]->(related)
         RETURN
           n.id AS id,
+          // Get name based on node type - different nodes store names differently
+          COALESCE(
+            n.name,                           // GearItem, Technology, OutdoorBrand, ProductFamily
+            n.title,                          // VideoSource, some Insights
+            n.activity,                       // UsageScenario
+            n.term,                           // GlossaryTerm
+            n.metric,                         // PerformanceContext
+            n.condition,                      // WeatherCondition
+            n.segment,                        // MarketSegment
+            CASE WHEN n.content IS NOT NULL THEN substring(n.content, 0, 80) + '...' ELSE NULL END,  // Insight content preview
+            CASE WHEN n.url IS NOT NULL THEN n.url ELSE NULL END,  // VideoSource/DataSource URL as fallback
+            labels(n)[0] + ' #' + toString(id(n))  // Fallback: label + internal ID
+          ) AS displayName,
           n.name AS name,
           n.brand AS brand,
           n.category AS category,
           n.description AS description,
+          n.content AS content,
+          n.title AS title,
+          n.url AS url,
           n.price AS price,
           n.weight AS weight,
           labels(n) AS labels,
           properties(n) AS allProps,
-          collect(DISTINCT {type: type(r), target: related.name}) AS relationships
+          collect(DISTINCT {type: type(r), target: COALESCE(related.name, related.title, related.activity, labels(related)[0])}) AS relationships
         LIMIT 1
       `;
 
       const nodeData = await client.readOnlyQuery<{
         id: string;
-        name: string;
+        displayName: string;
+        name: string | null;
         brand: string | null;
         category: string | null;
         description: string | null;
+        content: string | null;
+        title: string | null;
+        url: string | null;
         price: number | null;
         weight: number | null;
         labels: string[];
@@ -182,7 +203,7 @@ async function flagOrphans(
       }>(nodeQuery, { nodeId: orphan.nodeId });
 
       const node = nodeData[0];
-      const nodeName = node?.name ?? `Unknown (${orphan.nodeId})`;
+      const nodeName = node?.displayName ?? `Unknown (${orphan.nodeId})`;
 
       // Determine proposed action based on classification
       let proposedAction: 'delete' | 'enrich' | 'merge' = 'enrich';
@@ -246,17 +267,27 @@ async function flagOrphans(
 
         // Create an approval request with full context
         const approvalId = randomUUID();
+        const nodeType = node?.labels?.[0] ?? 'Unknown';
         const candidates = [{
           nodeId: orphan.nodeId,
           nodeName,
+          nodeType,
           nodeProperties: {
+            // Common fields
             brand: node?.brand,
             category: node?.category,
-            description: node?.description,
+            description: node?.description ?? node?.content,
+            // GearItem specific
             price: node?.price,
             weight: node?.weight,
+            // VideoSource/DataSource specific
+            title: node?.title,
+            url: node?.url,
+            // Metadata
             labels: node?.labels,
             relationships: node?.relationships?.filter(r => r.target) ?? [],
+            // Include all properties for transparency
+            allProperties: node?.allProps,
           },
         }];
 
@@ -311,16 +342,23 @@ async function flagOrphans(
 function buildProblemDescription(
   orphan: ClassificationResult,
   node: {
-    name: string;
+    displayName: string;
+    name: string | null;
     brand: string | null;
     category: string | null;
+    content: string | null;
+    title: string | null;
+    url: string | null;
+    labels: string[];
     relationships: Array<{ type: string; target: string }>;
   } | undefined
 ): string {
   const parts: string[] = [];
+  const nodeType = node?.labels?.[0] ?? 'Unknown';
+  const displayName = node?.displayName ?? node?.name ?? 'Unknown';
 
   // What is this item?
-  parts.push(`**Item:** "${node?.name ?? 'Unknown'}"`);
+  parts.push(`**${nodeType}:** "${displayName}"`);
 
   // What's the problem?
   parts.push('\n**Problem:**');
@@ -344,20 +382,70 @@ function buildProblemDescription(
       parts.push(orphan.reasoning);
   }
 
-  // What data does it have?
+  // What data does it have? (varies by node type)
   parts.push('\n**Current Data:**');
-  if (node?.brand) parts.push(`- Brand: ${node.brand}`);
-  else parts.push('- Brand: ❌ Missing');
 
-  if (node?.category) parts.push(`- Category: ${node.category}`);
-  else parts.push('- Category: ❌ Missing');
+  // Type-specific fields
+  switch (nodeType) {
+    case 'GearItem':
+      parts.push(`- Brand: ${node?.brand ?? '❌ Missing'}`);
+      parts.push(`- Category: ${node?.category ?? '❌ Missing'}`);
+      break;
+    case 'VideoSource':
+      parts.push(`- Title: ${node?.title ?? '❌ Missing'}`);
+      parts.push(`- URL: ${node?.url ?? '❌ Missing'}`);
+      break;
+    case 'Insight':
+      parts.push(`- Category: ${node?.category ?? '❌ Missing'}`);
+      if (node?.content) {
+        const preview = node.content.length > 100 ? node.content.substring(0, 100) + '...' : node.content;
+        parts.push(`- Content: "${preview}"`);
+      }
+      break;
+    case 'DataSource':
+      parts.push(`- URL: ${node?.url ?? '❌ Missing'}`);
+      break;
+    case 'Technology':
+    case 'OutdoorBrand':
+    case 'ProductFamily':
+      parts.push(`- Name: ${node?.name ?? '❌ Missing'}`);
+      break;
+    default:
+      if (node?.brand) parts.push(`- Brand: ${node.brand}`);
+      if (node?.category) parts.push(`- Category: ${node.category}`);
+      if (node?.url) parts.push(`- URL: ${node.url}`);
+  }
 
+  // Relationships (common to all types)
   const relCount = node?.relationships?.filter(r => r.target).length ?? 0;
-  parts.push(`- Relationships: ${relCount > 0 ? relCount : '❌ None'}`);
+  if (relCount > 0) {
+    const relSample = node?.relationships?.filter(r => r.target).slice(0, 3)
+      .map(r => `${r.type} → ${r.target}`).join(', ');
+    parts.push(`- Relationships: ${relCount} (${relSample}${relCount > 3 ? '...' : ''})`);
+  } else {
+    parts.push(`- Relationships: ❌ None (orphan)`);
+  }
 
   // Detected keywords (if any)
   if (orphan.detectedKeywords && orphan.detectedKeywords.length > 0) {
     parts.push(`\n**Valuable Keywords Found:** ${orphan.detectedKeywords.join(', ')}`);
+  }
+
+  // Suggested resolution based on node type
+  parts.push('\n**Suggested Resolution:**');
+  if (nodeType === 'GearItem') {
+    if (!node?.brand) {
+      parts.push('- Research and add brand information');
+    }
+    parts.push('- Connect to related ProductFamily, Technology, or UsageScenario nodes');
+  } else if (nodeType === 'VideoSource') {
+    parts.push('- Connect to GearItems mentioned in this video');
+    parts.push('- Or delete if video is no longer relevant');
+  } else if (nodeType === 'Insight') {
+    parts.push('- Connect to relevant GearItem, ProductFamily, or OutdoorBrand');
+    parts.push('- Or delete if content is not valuable');
+  } else {
+    parts.push('- Review and connect to main graph, or delete if not valuable');
   }
 
   return parts.join('\n');
