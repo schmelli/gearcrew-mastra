@@ -134,6 +134,7 @@ async function deleteOrphans(
 
 /**
  * Step 3: Flag valuable orphans for review (FR-004)
+ * Creates actionable approval requests with full context for human review
  */
 async function flagOrphans(
   workflowRunId: string,
@@ -141,17 +142,75 @@ async function flagOrphans(
   dryRun: boolean
 ): Promise<{ flaggedIds: string[]; flaggedCount: number }> {
   const auditLogger = getAuditLogger();
+  const client = getMemgraphClient();
+  const { getLibSQLClient } = await import('@/mastra/index');
+  const db = getLibSQLClient();
   const flaggedIds: string[] = [];
 
   for (const orphan of recommendations.toFlag) {
     try {
-      // Create a gardening issue for review
+      // Fetch actual node data from Memgraph for context
+      const nodeQuery = `
+        MATCH (n)
+        WHERE n.id = $nodeId OR toString(id(n)) = $nodeId
+        OPTIONAL MATCH (n)-[r]->(related)
+        RETURN
+          n.id AS id,
+          n.name AS name,
+          n.brand AS brand,
+          n.category AS category,
+          n.description AS description,
+          n.price AS price,
+          n.weight AS weight,
+          labels(n) AS labels,
+          properties(n) AS allProps,
+          collect(DISTINCT {type: type(r), target: related.name}) AS relationships
+        LIMIT 1
+      `;
+
+      const nodeData = await client.readOnlyQuery<{
+        id: string;
+        name: string;
+        brand: string | null;
+        category: string | null;
+        description: string | null;
+        price: number | null;
+        weight: number | null;
+        labels: string[];
+        allProps: Record<string, unknown>;
+        relationships: Array<{ type: string; target: string }>;
+      }>(nodeQuery, { nodeId: orphan.nodeId });
+
+      const node = nodeData[0];
+      const nodeName = node?.name ?? `Unknown (${orphan.nodeId})`;
+
+      // Determine proposed action based on classification
+      let proposedAction: 'delete' | 'enrich' | 'merge' = 'enrich';
+      let actionDescription = '';
+
+      if (orphan.classification === 'empty_island' || orphan.classification === 'generic_no_brand') {
+        proposedAction = 'delete';
+        actionDescription = `Delete this orphan node - it appears to be ${
+          orphan.classification === 'empty_island' ? 'an empty/minimal entry' : 'generic without brand info'
+        } and has no valuable connections.`;
+      } else if (orphan.classification === 'small_island' || orphan.classification === 'large_island') {
+        proposedAction = 'enrich';
+        actionDescription = `Research and enrich this ${
+          orphan.classification === 'small_island' ? 'small' : 'large'
+        } disconnected component. It may contain valuable data that should be connected to the main graph.`;
+      } else if (orphan.detectedKeywords && orphan.detectedKeywords.length > 0) {
+        proposedAction = 'enrich';
+        actionDescription = `This item contains valuable keywords (${orphan.detectedKeywords.join(', ')}). Research to add missing brand, specs, and relationships.`;
+      }
+
+      // Create the gardening issue
+      const issueId = randomUUID();
       const issue: GardeningIssue = {
-        id: randomUUID(),
+        id: issueId,
         type: 'orphan' as IssueType,
         severity: (orphan.classification === 'large_island' ? 'high' : 'medium') as Severity,
         entities: [orphan.nodeId],
-        suggestedAction: 'Review and resolve orphan node',
+        suggestedAction: actionDescription,
         confidence: orphan.confidence,
         status: 'open',
         detectedAt: new Date().toISOString(),
@@ -164,6 +223,63 @@ async function flagOrphans(
       };
 
       if (!dryRun) {
+        // Save the issue to the database
+        await db.execute({
+          sql: `
+            INSERT INTO gardening_issues (id, type, severity, entities, suggested_action, confidence, status, detected_at, workflow_run_id, graph_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          args: [
+            issue.id,
+            issue.type,
+            issue.severity,
+            JSON.stringify(issue.entities),
+            issue.suggestedAction,
+            issue.confidence,
+            issue.status,
+            issue.detectedAt,
+            issue.workflowRunId,
+            JSON.stringify(issue.graphContext),
+          ],
+        });
+
+        // Create an approval request with full context
+        const approvalId = randomUUID();
+        const candidates = [{
+          nodeId: orphan.nodeId,
+          nodeName,
+          nodeProperties: {
+            brand: node?.brand,
+            category: node?.category,
+            description: node?.description,
+            price: node?.price,
+            weight: node?.weight,
+            labels: node?.labels,
+            relationships: node?.relationships?.filter(r => r.target) ?? [],
+          },
+        }];
+
+        // Build a clear problem description
+        const problemDescription = buildProblemDescription(orphan, node);
+
+        await db.execute({
+          sql: `
+            INSERT INTO approval_requests (id, issue_id, workflow_run_id, proposed_action, candidates, reasoning, confidence, status, created_at, step_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+          `,
+          args: [
+            approvalId,
+            issueId,
+            workflowRunId,
+            proposedAction,
+            JSON.stringify(candidates),
+            problemDescription,
+            orphan.confidence,
+            new Date().toISOString(),
+            `flag-${orphan.nodeId}`,
+          ],
+        });
+
         // Log flagging action
         await auditLogger.logFlag(
           workflowRunId,
@@ -174,6 +290,7 @@ async function flagOrphans(
             confidence: orphan.confidence,
             reasoning: orphan.reasoning,
             issueId: issue.id,
+            approvalId,
           }
         );
       }
@@ -185,6 +302,64 @@ async function flagOrphans(
   }
 
   return { flaggedIds, flaggedCount: flaggedIds.length };
+}
+
+/**
+ * Build a clear, human-readable problem description
+ */
+function buildProblemDescription(
+  orphan: ClassificationResult,
+  node: {
+    name: string;
+    brand: string | null;
+    category: string | null;
+    relationships: Array<{ type: string; target: string }>;
+  } | undefined
+): string {
+  const parts: string[] = [];
+
+  // What is this item?
+  parts.push(`**Item:** "${node?.name ?? 'Unknown'}"`);
+
+  // What's the problem?
+  parts.push('\n**Problem:**');
+  switch (orphan.classification) {
+    case 'empty_island':
+      parts.push('This node is isolated with minimal data - no meaningful content or connections.');
+      break;
+    case 'generic_no_brand':
+      parts.push('This appears to be a generic item without brand information, making it hard to identify.');
+      break;
+    case 'small_island':
+      parts.push(`This node is part of a small disconnected component (${orphan.reasoning}).`);
+      break;
+    case 'large_island':
+      parts.push(`This node is part of a larger disconnected component that needs review (${orphan.reasoning}).`);
+      break;
+    case 'valuable_content':
+      parts.push('This node has valuable content but is not properly connected to the main graph.');
+      break;
+    default:
+      parts.push(orphan.reasoning);
+  }
+
+  // What data does it have?
+  parts.push('\n**Current Data:**');
+  if (node?.brand) parts.push(`- Brand: ${node.brand}`);
+  else parts.push('- Brand: ❌ Missing');
+
+  if (node?.category) parts.push(`- Category: ${node.category}`);
+  else parts.push('- Category: ❌ Missing');
+
+  const relCount = node?.relationships?.filter(r => r.target).length ?? 0;
+  parts.push(`- Relationships: ${relCount > 0 ? relCount : '❌ None'}`);
+
+  // Detected keywords (if any)
+  if (orphan.detectedKeywords && orphan.detectedKeywords.length > 0) {
+    parts.push(`\n**Valuable Keywords Found:** ${orphan.detectedKeywords.join(', ')}`);
+  }
+
+  return parts.join('\n');
 }
 
 /**
