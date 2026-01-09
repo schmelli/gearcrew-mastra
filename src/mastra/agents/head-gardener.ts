@@ -354,8 +354,9 @@ export class HeadGardenerAgent {
 
     try {
       // Use LLM with tool calling
+      // Note: Using deepseek-chat as deepseek-reasoner doesn't support tool calling
       const result = await generateText({
-        model: deepseek('deepseek-reasoner'),
+        model: deepseek('deepseek-chat'),
         messages,
         tools: headGardenerTools,
         maxSteps: 5, // Allow multi-step tool usage
