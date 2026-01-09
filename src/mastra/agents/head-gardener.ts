@@ -11,9 +11,12 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { generateText, tool } from 'ai';
 
 // DeepSeek provider (OpenAI-compatible API)
+const apiKey = process.env.DEEPSEEK_API_KEY ?? '';
+console.log('DeepSeek API key present:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
+
 const deepseek = createOpenAI({
   baseURL: 'https://api.deepseek.com/v1',
-  apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+  apiKey,
 });
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
@@ -353,6 +356,12 @@ export class HeadGardenerAgent {
     const toolCalls: Array<{ tool: string; result: unknown }> = [];
 
     try {
+      console.log('Head Gardener: Sending request to DeepSeek', {
+        model: 'deepseek-chat',
+        messageCount: messages.length,
+        toolCount: Object.keys(headGardenerTools).length,
+      });
+
       // Use LLM with tool calling
       // Note: Using deepseek-chat as deepseek-reasoner doesn't support tool calling
       const result = await generateText({
@@ -360,6 +369,11 @@ export class HeadGardenerAgent {
         messages,
         tools: headGardenerTools,
         maxSteps: 5, // Allow multi-step tool usage
+      });
+
+      console.log('Head Gardener: Received response', {
+        text: result.text?.substring(0, 100),
+        stepCount: result.steps.length,
       });
 
       // Collect tool calls for response
@@ -396,6 +410,14 @@ export class HeadGardenerAgent {
         suggestions: this.getSuggestions(toolCalls),
       };
     } catch (error) {
+      // Log detailed error for debugging
+      console.error('Head Gardener LLM error:', {
+        name: error instanceof Error ? error.name : 'Unknown',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        cause: error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined,
+      });
+
       const errorMessage = `I encountered an error: ${error instanceof Error ? error.message : String(error)}. Please try again.`;
 
       this.conversationHistory.push({
