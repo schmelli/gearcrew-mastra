@@ -178,11 +178,17 @@ async function executeWorkflowAsync(
       default:
         throw new Error(`Unknown workflow: ${workflowName}`);
     }
+
+    // Update workflow run status to completed on success
+    await db.execute({
+      sql: `UPDATE workflow_runs SET status = 'completed', completed_at = ? WHERE id = ?`,
+      args: [new Date().toISOString(), runId],
+    });
   } catch (error) {
     // Update workflow run with error
     await db.execute({
-      sql: `UPDATE workflow_runs SET status = 'failed', error = ? WHERE id = ?`,
-      args: [error instanceof Error ? error.message : String(error), runId],
+      sql: `UPDATE workflow_runs SET status = 'failed', completed_at = ?, error = ? WHERE id = ?`,
+      args: [new Date().toISOString(), error instanceof Error ? error.message : String(error), runId],
     });
   }
 }
