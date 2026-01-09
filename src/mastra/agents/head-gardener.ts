@@ -2,78 +2,19 @@
  * T048-T049: Head Gardener Agent (Phase 6 - True LLM Reasoning)
  * Implements FR-010, FR-011, FR-027: Interactive chat interface for graph management
  *
- * REBUILT: Now uses actual LLM tool-calling instead of keyword matching
+ * REBUILT: Now uses Vercel AI SDK with @ai-sdk/deepseek for proper tool calling
  * Per Constitution Principle III: Human Oversight
  */
 
 import { z } from 'zod';
+import { createDeepSeek } from '@ai-sdk/deepseek';
+import { generateText, tool, CoreMessage } from 'ai';
 
-// DeepSeek API configuration
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
-const apiKey = process.env.DEEPSEEK_API_KEY ?? '';
+// Initialize DeepSeek client using @ai-sdk/deepseek
+const deepseek = createDeepSeek({
+  apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+});
 
-interface DeepSeekMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-interface DeepSeekTool {
-  type: 'function';
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-}
-
-interface DeepSeekResponse {
-  choices: Array<{
-    message: {
-      role: string;
-      content?: string;
-      tool_calls?: Array<{
-        id: string;
-        type: string;
-        function: {
-          name: string;
-          arguments: string;
-        };
-      }>;
-    };
-    finish_reason: string;
-  }>;
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-async function callDeepSeek(
-  messages: DeepSeekMessage[],
-  tools?: DeepSeekTool[]
-): Promise<DeepSeekResponse> {
-  const response = await fetch(DEEPSEEK_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages,
-      tools: tools && tools.length > 0 ? tools : undefined,
-      max_tokens: 4096,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`DeepSeek API error: ${response.status} - ${errorText}`);
-  }
-
-  return response.json();
-}
 import { registerAgent, getLibSQLClient } from '../index';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
 import {
@@ -118,13 +59,12 @@ When users want to approve or reject items, use the approval tools.
 When users want to trigger workflows, use the workflow tools.`;
 
 // ============================================================================
-// Tool Definitions for LLM (TEMPORARILY DISABLED - using direct API calls)
-// TODO: Re-enable once AI SDK compatibility is resolved
+// Tool Definitions for LLM
+// Uses Vercel AI SDK tool() helper with automatic Zod→JSON Schema conversion
 // ============================================================================
 
-/*
 const headGardenerTools = {
-  getSystemStatus: {
+  getSystemStatus: tool({
     description: 'Get overall system health status including workflow state, pending approvals, and graph metrics',
     parameters: z.object({}),
     execute: async () => {
@@ -353,7 +293,6 @@ const headGardenerTools = {
     },
   }),
 };
-*/
 
 // ============================================================================
 // Chat Message Interface
@@ -386,7 +325,7 @@ export class HeadGardenerAgent {
   }
 
   /**
-   * Process a user chat message using direct DeepSeek API
+   * Process a user chat message using Vercel AI SDK with tools
    */
   async chat(userMessage: string): Promise<ChatResponse> {
     const timestamp = new Date().toISOString();
@@ -398,8 +337,8 @@ export class HeadGardenerAgent {
       timestamp,
     });
 
-    // Build messages for DeepSeek API
-    const messages: DeepSeekMessage[] = [
+    // Build messages for AI SDK (CoreMessage format)
+    const messages: CoreMessage[] = [
       { role: 'system', content: SYSTEM_PROMPT },
     ];
 
@@ -407,21 +346,36 @@ export class HeadGardenerAgent {
     const recentHistory = this.conversationHistory.slice(-10);
     for (const msg of recentHistory) {
       messages.push({
-        role: msg.role,
+        role: msg.role as 'user' | 'assistant',
         content: msg.content,
       });
     }
 
     try {
-      // Call DeepSeek API directly (no tools for now)
-      const result = await callDeepSeek(messages);
-      const responseContent = result.choices[0]?.message?.content || 'I processed your request.';
+      // Use generateText with tools - AI SDK handles tool calling automatically
+      const result = await generateText({
+        model: deepseek('deepseek-chat'),
+        messages,
+        tools: headGardenerTools,
+        maxSteps: 5, // Allow up to 5 tool calls in a single request
+      });
+
+      // Collect tool calls from all steps for the response
+      const toolCalls = result.steps.flatMap(step =>
+        step.toolCalls.map(call => ({
+          tool: call.toolName,
+          result: call.args,
+        }))
+      );
+
+      const responseContent = result.text || 'I processed your request.';
 
       // Add assistant response to history
       this.conversationHistory.push({
         role: 'assistant',
         content: responseContent,
         timestamp: new Date().toISOString(),
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       });
 
       // Trim history if needed
@@ -434,7 +388,8 @@ export class HeadGardenerAgent {
 
       return {
         message: responseContent,
-        suggestions: this.getDefaultSuggestions(),
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        suggestions: this.getSuggestions(toolCalls),
       };
     } catch (error) {
       // Log detailed error for debugging
@@ -460,9 +415,26 @@ export class HeadGardenerAgent {
   }
 
   /**
-   * Get default suggestions
+   * Get contextual suggestions based on the tools that were called
    */
-  private getDefaultSuggestions(): string[] {
+  private getSuggestions(toolCalls: Array<{ tool: string; result: unknown }>): string[] {
+    // Provide contextual suggestions based on what tools were used
+    const usedTools = new Set(toolCalls.map(tc => tc.tool));
+
+    if (usedTools.has('getSystemStatus')) {
+      return ['Show pending approvals', 'Analyze orphan nodes', 'Run morning hygiene workflow'];
+    }
+    if (usedTools.has('getPendingApprovals')) {
+      return ['Approve all with confidence > 0.9', 'Reject item 0', 'Show system status'];
+    }
+    if (usedTools.has('analyzeOrphans') || usedTools.has('analyzeGraphHealth')) {
+      return ['Triage flagged items', 'Find missing data', 'Run data quality workflow'];
+    }
+    if (usedTools.has('triggerWorkflow')) {
+      return ['Show workflow status', 'List recent workflows', 'Show system status'];
+    }
+
+    // Default suggestions
     return ['What is the system status?', 'Show pending approvals', 'Analyze graph health'];
   }
 
