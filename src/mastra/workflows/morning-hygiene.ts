@@ -223,18 +223,19 @@ async function flagOrphans(
       };
 
       if (!dryRun) {
-        // Save the issue to the database
+        // Save the issue to the database (using schema column names)
         await db.execute({
           sql: `
-            INSERT INTO gardening_issues (id, type, severity, entities, suggested_action, confidence, status, detected_at, workflow_run_id, graph_context)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO gardening_issues (id, issue_type, severity, title, affected_nodes, description, confidence, status, detected_at, workflow_run_id, graph_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           args: [
             issue.id,
             issue.type,
             issue.severity,
-            JSON.stringify(issue.entities),
-            issue.suggestedAction,
+            nodeName, // title
+            JSON.stringify(issue.entities), // affected_nodes
+            issue.suggestedAction, // description
             issue.confidence,
             issue.status,
             issue.detectedAt,
