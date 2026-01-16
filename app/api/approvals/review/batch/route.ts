@@ -25,6 +25,7 @@ interface BatchResult {
  * - decision: 'approve' | 'reject'
  * - nodeType: Filter by node type (optional)
  * - action: Filter by proposed action (optional)
+ * - minConfidence: Minimum confidence threshold 0-1 (optional, e.g. 0.95 for 95%)
  * - limit: Maximum items to process (default 50, max 500)
  * - notes: Notes for all decisions
  * - dryRun: If true, just return what would be affected (default false)
@@ -38,6 +39,7 @@ export async function POST(request: NextRequest) {
       decision,
       nodeType,
       action: actionFilter,
+      minConfidence,
       limit = 50,
       notes,
       dryRun = false,
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest) {
     // Get pending approvals matching filter
     const pendingResult = await db.execute({
       sql: `
-        SELECT id, candidates, proposed_action, workflow_run_id
+        SELECT id, candidates, proposed_action, workflow_run_id, confidence
         FROM approval_requests
         WHERE status = 'pending'
         ORDER BY created_at ASC
@@ -72,6 +74,7 @@ export async function POST(request: NextRequest) {
       proposedAction: string;
       workflowRunId: string;
       nodeProperties: Record<string, unknown>;
+      confidence: number;
     }> = [];
 
     for (const row of pendingResult.rows) {
@@ -81,10 +84,12 @@ export async function POST(request: NextRequest) {
         const candidates = JSON.parse(row.candidates as string);
         const candidate = candidates[0];
         const candidateNodeType = candidate.nodeType ?? candidate.nodeProperties?.labels?.[0] ?? 'Unknown';
+        const candidateConfidence = (row.confidence as number) ?? 0;
 
         // Apply filters
         if (nodeType && candidateNodeType !== nodeType) continue;
         if (actionFilter && row.proposed_action !== actionFilter) continue;
+        if (minConfidence !== undefined && candidateConfidence < minConfidence) continue;
 
         matchingApprovals.push({
           id: row.id as string,
@@ -94,6 +99,7 @@ export async function POST(request: NextRequest) {
           proposedAction: row.proposed_action as string,
           workflowRunId: row.workflow_run_id as string,
           nodeProperties: candidate.nodeProperties ?? {},
+          confidence: candidateConfidence,
         });
       } catch {
         // Skip malformed entries
@@ -105,14 +111,15 @@ export async function POST(request: NextRequest) {
         dryRun: true,
         wouldProcess: matchingApprovals.length,
         decision,
-        filters: { nodeType, action: actionFilter, limit: maxLimit },
+        filters: { nodeType, action: actionFilter, minConfidence, limit: maxLimit },
         preview: matchingApprovals.slice(0, 10).map(a => ({
           id: a.id,
           nodeName: a.nodeName,
           nodeType: a.nodeType,
           proposedAction: a.proposedAction,
+          confidence: a.confidence,
         })),
-        message: `Would ${decision} ${matchingApprovals.length} items`,
+        message: `Would ${decision} ${matchingApprovals.length} items${minConfidence ? ` with confidence >= ${(minConfidence * 100).toFixed(0)}%` : ''}`,
       });
     }
 
