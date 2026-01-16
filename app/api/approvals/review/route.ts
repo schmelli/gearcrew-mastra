@@ -247,7 +247,7 @@ export async function GET(request: NextRequest) {
  *
  * Body:
  * - approvalId: The ID of the approval to decide on
- * - decision: 'approve' | 'reject' | 'skip'
+ * - decision: 'approve' | 'reject' | 'skip' | 'delete'
  * - notes: Optional notes explaining the decision
  */
 export async function POST(request: NextRequest) {
@@ -261,9 +261,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'approvalId is required' }, { status: 400 });
     }
 
-    if (!['approve', 'reject', 'skip'].includes(decision)) {
+    if (!['approve', 'reject', 'skip', 'delete'].includes(decision)) {
       return NextResponse.json(
-        { error: 'decision must be approve, reject, or skip' },
+        { error: 'decision must be approve, reject, skip, or delete' },
         { status: 400 }
       );
     }
@@ -292,6 +292,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Determine status based on decision
+    const statusMap: Record<string, string> = {
+      approve: 'approved',
+      reject: 'rejected',
+      delete: 'deleted',
+    };
+    const issueStatusMap: Record<string, string> = {
+      approve: 'resolved',
+      reject: 'dismissed',
+      delete: 'resolved',
+    };
+
     // Update the approval status
     const resolvedAt = new Date().toISOString();
     await db.execute({
@@ -301,7 +313,7 @@ export async function POST(request: NextRequest) {
         WHERE id = ?
       `,
       args: [
-        decision === 'approve' ? 'approved' : 'rejected',
+        statusMap[decision],
         resolvedAt,
         'admin', // Would be actual user in production
         decision,
@@ -318,21 +330,31 @@ export async function POST(request: NextRequest) {
         WHERE id = ?
       `,
       args: [
-        decision === 'approve' ? 'resolved' : 'dismissed',
+        issueStatusMap[decision],
         'admin',
         resolvedAt,
         decision === 'approve'
           ? `Approved: ${approval.proposed_action}`
-          : `Rejected: ${notes ?? 'No reason provided'}`,
+          : decision === 'delete'
+            ? `Deleted: ${notes ?? 'Identified as junk/invalid data'}`
+            : `Rejected: ${notes ?? 'No reason provided'}`,
         approval.issue_id,
       ],
     });
 
-    // If approved, execute the proposed action
+    // Execute action based on decision
     let actionResult = null;
     if (decision === 'approve') {
       actionResult = await executeApprovedAction(
         approval.proposed_action as string,
+        candidate.nodeId,
+        candidate.nodeProperties,
+        approval.workflow_run_id as string
+      );
+    } else if (decision === 'delete') {
+      // Delete the node from the graph
+      actionResult = await executeApprovedAction(
+        'delete',
         candidate.nodeId,
         candidate.nodeProperties,
         approval.workflow_run_id as string
@@ -342,11 +364,15 @@ export async function POST(request: NextRequest) {
     // Get updated stats
     const stats = await getReviewStats(db, null, null);
 
+    const messageMap: Record<string, string> = {
+      approve: `✅ Approved: ${approval.proposed_action} for "${candidate.nodeName}"`,
+      reject: `❌ Rejected: "${candidate.nodeName}"`,
+      delete: `🗑️ Deleted: "${candidate.nodeName}" from graph`,
+    };
+
     return NextResponse.json({
       success: true,
-      message: decision === 'approve'
-        ? `✅ Approved: ${approval.proposed_action} for "${candidate.nodeName}"`
-        : `❌ Rejected: "${candidate.nodeName}"`,
+      message: messageMap[decision],
       approvalId,
       decision,
       actionResult,
@@ -465,7 +491,7 @@ async function executeApprovedAction(
 
         await auditLogger.logDelete(
           workflowRunId,
-          'manual-review',
+          'manual',
           nodeId,
           (nodeProperties.labels as string[])?.[0] ?? 'Unknown',
           nodeProperties,
@@ -480,7 +506,7 @@ async function executeApprovedAction(
         // Log that it's been approved for enrichment
         await auditLogger.logFlag(
           workflowRunId,
-          'manual-review',
+          'manual',
           nodeId,
           (nodeProperties.labels as string[])?.[0] ?? 'Unknown',
           { confidence: 1.0, reasoning: 'Approved for enrichment - queued for research' }

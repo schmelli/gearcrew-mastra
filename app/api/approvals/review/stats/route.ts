@@ -28,6 +28,7 @@ export async function GET() {
     let pending = 0;
     let approved = 0;
     let rejected = 0;
+    let deleted = 0;
 
     for (const row of statusResult.rows) {
       const count = row.count as number;
@@ -36,6 +37,7 @@ export async function GET() {
         case 'pending': pending = count; break;
         case 'approved': approved = count; break;
         case 'rejected': rejected = count; break;
+        case 'deleted': deleted = count; break;
       }
     }
 
@@ -92,8 +94,9 @@ export async function GET() {
       resolution: row.resolution as string,
     }));
 
-    // Calculate progress
-    const progress = total > 0 ? Math.round(((approved + rejected) / total) * 100) : 0;
+    // Calculate progress (approved + rejected + deleted = processed)
+    const processed = approved + rejected + deleted;
+    const progress = total > 0 ? Math.round((processed / total) * 100) : 0;
 
     return NextResponse.json({
       summary: {
@@ -101,6 +104,7 @@ export async function GET() {
         pending,
         approved,
         rejected,
+        deleted,
         progress: `${progress}%`,
       },
       breakdown: {

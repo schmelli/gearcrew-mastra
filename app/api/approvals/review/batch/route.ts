@@ -45,9 +45,9 @@ export async function POST(request: NextRequest) {
       dryRun = false,
     } = body;
 
-    if (!['approve', 'reject'].includes(decision)) {
+    if (!['approve', 'reject', 'delete'].includes(decision)) {
       return NextResponse.json(
-        { error: 'decision must be approve or reject' },
+        { error: 'decision must be approve, reject, or delete' },
         { status: 400 }
       );
     }
@@ -134,6 +134,13 @@ export async function POST(request: NextRequest) {
     const resolvedAt = new Date().toISOString();
     const client = getMemgraphClient();
 
+    // Status mapping for different decisions
+    const statusMap: Record<string, string> = {
+      approve: 'approved',
+      reject: 'rejected',
+      delete: 'deleted',
+    };
+
     for (const approval of matchingApprovals) {
       result.processed++;
 
@@ -146,7 +153,7 @@ export async function POST(request: NextRequest) {
             WHERE id = ?
           `,
           args: [
-            decision === 'approve' ? 'approved' : 'rejected',
+            statusMap[decision],
             resolvedAt,
             'batch-admin',
             decision,
@@ -155,8 +162,8 @@ export async function POST(request: NextRequest) {
           ],
         });
 
-        // If approved and action is delete, execute it
-        if (decision === 'approve' && approval.proposedAction === 'delete') {
+        // Execute delete if decision is 'delete' OR if approved and action is delete
+        if (decision === 'delete' || (decision === 'approve' && approval.proposedAction === 'delete')) {
           await client.writeTransaction(
             `MATCH (n) WHERE n.id = $nodeId OR toString(id(n)) = $nodeId DETACH DELETE n`,
             { nodeId: approval.nodeId }
@@ -188,6 +195,12 @@ export async function POST(request: NextRequest) {
       stats[row.status as string] = row.count as number;
     }
 
+    const decisionVerbs: Record<string, string> = {
+      approve: 'Approved',
+      reject: 'Rejected',
+      delete: 'Deleted',
+    };
+
     return NextResponse.json({
       success: result.failed === 0,
       result,
@@ -195,8 +208,9 @@ export async function POST(request: NextRequest) {
         pending: stats['pending'] ?? 0,
         approved: stats['approved'] ?? 0,
         rejected: stats['rejected'] ?? 0,
+        deleted: stats['deleted'] ?? 0,
       },
-      message: `${decision === 'approve' ? 'Approved' : 'Rejected'} ${result.succeeded} of ${result.processed} items${
+      message: `${decisionVerbs[decision]} ${result.succeeded} of ${result.processed} items${
         result.failed > 0 ? ` (${result.failed} failed)` : ''
       }`,
     });
