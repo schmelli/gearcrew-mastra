@@ -129,6 +129,7 @@ export class EnricherAgent {
         };
       }
 
+      console.log(`[ENRICHER] Node: ${nodeId}, Name: ${name}, Brand: ${brand}, Missing fields: ${JSON.stringify(missingFields)}`);
       const searchResult = await this.firecrawl.searchGearSpecs(name, brand);
       console.log(`[ENRICHER] Node: ${nodeId}, Search result: ${JSON.stringify({ success: searchResult.success, hasSpecs: !!searchResult.specs, confidence: searchResult.specs?.confidence, weight: searchResult.specs?.weight })}`);
 
