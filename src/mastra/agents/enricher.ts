@@ -21,7 +21,7 @@ import {
 
 // Configuration
 const ENRICHMENT_CONFIG = {
-  confidenceThreshold: 0.05, // Minimum confidence to apply enrichment (very low for testing)
+  confidenceThreshold: 0.15, // Minimum confidence to apply enrichment (at least 2 fields)
   maxSearchAttempts: 3,
   batchSize: 10,
   rateLimit: {
@@ -129,9 +129,7 @@ export class EnricherAgent {
         };
       }
 
-      console.log(`[ENRICHER] Node: ${nodeId}, Name: ${name}, Brand: ${brand}, Missing fields: ${JSON.stringify(missingFields)}`);
       const searchResult = await this.firecrawl.searchGearSpecs(name, brand);
-      console.log(`[ENRICHER] Node: ${nodeId}, Search result: ${JSON.stringify({ success: searchResult.success, hasSpecs: !!searchResult.specs, confidence: searchResult.specs?.confidence, weight: searchResult.specs?.weight })}`);
 
       if (!searchResult.success || !searchResult.specs) {
         return {
@@ -149,7 +147,6 @@ export class EnricherAgent {
         searchResult.specs,
         missingFields
       );
-      console.log(`[ENRICHER] Node: ${nodeId}, Mapped: enriched=${JSON.stringify(enrichedFields)}, updates=${JSON.stringify(updates)}`);
 
       // Check confidence threshold
       if ((searchResult.specs.confidence || 0) < ENRICHMENT_CONFIG.confidenceThreshold) {
@@ -521,15 +518,7 @@ export class EnricherAgent {
       RETURN n
     `;
 
-    console.log(`[ENRICHER] Applying updates to ${nodeType} ${nodeId}: query=${query.replace(/\s+/g, ' ')}, params=${JSON.stringify({ nodeId, ...updates })}`);
-
-    try {
-      await client.writeTransaction(query, { nodeId, ...updates });
-      console.log(`[ENRICHER] Successfully updated ${nodeId}`);
-    } catch (error) {
-      console.error(`[ENRICHER] Failed to update ${nodeId}:`, error);
-      throw error;
-    }
+    await client.writeTransaction(query, { nodeId, ...updates });
   }
 
   /**
