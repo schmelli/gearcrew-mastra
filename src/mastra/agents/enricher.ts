@@ -21,7 +21,7 @@ import {
 
 // Configuration
 const ENRICHMENT_CONFIG = {
-  confidenceThreshold: 0.3, // Minimum confidence to apply enrichment (lowered for testing)
+  confidenceThreshold: 0.05, // Minimum confidence to apply enrichment (very low for testing)
   maxSearchAttempts: 3,
   batchSize: 10,
   rateLimit: {
