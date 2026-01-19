@@ -21,7 +21,8 @@ import {
 
 // Configuration
 const ENRICHMENT_CONFIG = {
-  confidenceThreshold: 0.15, // Minimum confidence to apply enrichment (at least 2 fields)
+  confidenceThreshold: 0.07, // Minimum confidence (at least 1 field)
+  requiredFields: ['weight'] as const, // Weight is mandatory for enrichment
   maxSearchAttempts: 3,
   batchSize: 10,
   rateLimit: {
@@ -158,6 +159,23 @@ export class EnricherAgent {
           confidence: searchResult.specs.confidence || 0,
           source: searchResult.sources?.[0],
           error: `Confidence ${searchResult.specs.confidence} below threshold ${ENRICHMENT_CONFIG.confidenceThreshold}`,
+        };
+      }
+
+      // Check that weight is included (most important field)
+      const hasRequiredFields = ENRICHMENT_CONFIG.requiredFields.every(
+        (field) => enrichedFields.includes(field)
+      );
+
+      if (!hasRequiredFields && missingFields.includes('weight')) {
+        return {
+          nodeId,
+          success: false,
+          enrichedFields: [],
+          skippedFields: missingFields,
+          confidence: searchResult.specs.confidence || 0,
+          source: searchResult.sources?.[0],
+          error: 'Weight is required but could not be extracted',
         };
       }
 
