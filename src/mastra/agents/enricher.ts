@@ -486,8 +486,12 @@ export class EnricherAgent {
     // Add metadata
     if (enrichedFields.length > 0) {
       updates.last_enriched_at = new Date().toISOString();
-      updates.enrichment_source = specs.sourceUrl;
-      updates.enrichment_confidence = specs.confidence;
+      if (specs.sourceUrl) {
+        updates.enrichment_source = specs.sourceUrl;
+      }
+      if (specs.confidence) {
+        updates.enrichment_confidence = specs.confidence;
+      }
     }
 
     return { enrichedFields, skippedFields, updates };
