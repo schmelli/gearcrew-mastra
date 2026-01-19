@@ -27,15 +27,10 @@ const ScrapeRequestSchema = z.object({
 
 const SearchRequestSchema = z.object({
   query: z.string(),
-  pageOptions: z
+  limit: z.number().min(1).max(20).optional().default(5),
+  scrapeOptions: z
     .object({
-      onlyMainContent: z.boolean().optional(),
-      fetchPageContent: z.boolean().optional(),
-    })
-    .optional(),
-  searchOptions: z
-    .object({
-      limit: z.number().min(1).max(20).optional().default(5),
+      formats: z.array(z.enum(['markdown', 'html', 'rawHtml', 'links'])).optional(),
     })
     .optional(),
 });
@@ -225,8 +220,8 @@ export class FirecrawlClient {
     const query = brand ? `${brand} ${gearName} specifications weight dimensions` : `${gearName} specifications weight dimensions outdoor gear`;
 
     const searchResult = await this.search(query, {
-      searchOptions: { limit: 5 },
-      pageOptions: { fetchPageContent: true, onlyMainContent: true },
+      limit: 5,
+      scrapeOptions: { formats: ['markdown'] },
     });
 
     if (!searchResult.success || searchResult.results.length === 0) {
@@ -241,8 +236,8 @@ export class FirecrawlClient {
     const extractedSpecs: GearSpecs[] = [];
 
     for (const result of searchResult.results) {
-      if (result.content) {
-        const specs = this.extractGearSpecs(result.content, result.url);
+      if (result.markdown) {
+        const specs = this.extractGearSpecs(result.markdown, result.url);
         if (specs) {
           extractedSpecs.push(specs);
         }
@@ -602,8 +597,8 @@ interface SearchResult {
   success: boolean;
   results: Array<{
     url: string;
-    title: string;
-    content?: string;
+    title?: string;
+    markdown?: string;
     description?: string;
   }>;
 }
