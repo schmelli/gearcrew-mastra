@@ -505,13 +505,16 @@ export class EnricherAgent {
       .map((key) => `n.${key} = $${key}`)
       .join(', ');
 
+    // Use gearId for GearItem nodes, id for others
+    const idField = nodeType === 'GearItem' ? 'gearId' : 'id';
+
     const query = `
-      MATCH (n:${nodeType} {id: $nodeId})
-      SET ${setClause}
+      MATCH (n:${nodeType} {${idField}: $nodeId})
+      SET ${setClause}, n.last_enriched_at = $enrichedAt
       RETURN n
     `;
 
-    await client.writeTransaction(query, { nodeId, ...updates });
+    await client.writeTransaction(query, { nodeId, enrichedAt: new Date().toISOString(), ...updates });
   }
 
   /**
