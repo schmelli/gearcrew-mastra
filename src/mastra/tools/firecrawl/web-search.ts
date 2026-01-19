@@ -82,6 +82,37 @@ export const GearSpecsSchema = z.object({
   sourceUrl: z.string().optional(),
   scrapedAt: z.string().optional(),
   confidence: z.number().min(0).max(1).optional(),
+
+  // Category-specific specs (T068 enhancement)
+  /** Person capacity for tents/hammocks */
+  capacityPersons: z.number().optional(),
+  /** Season rating for tents/sleeping bags */
+  seasonRating: z.enum(['3-season', '3.5-season', '4-season', 'summer', 'winter']).optional(),
+  /** Frame type for backpacks */
+  frameType: z.enum(['internal', 'external', 'frameless', 'removable']).optional(),
+  /** Fuel type for stoves */
+  fuelType: z
+    .enum(['canister', 'alcohol', 'wood', 'solid', 'multi-fuel', 'white-gas', 'propane'])
+    .optional(),
+  /** Connector type for electronics */
+  connectorType: z
+    .enum(['usb-c', 'usb-a', 'micro-usb', 'usb-mini', 'lightning', 'proprietary'])
+    .optional(),
+  /** Construction type for tents */
+  constructionType: z
+    .enum([
+      'freestanding',
+      'semi-freestanding',
+      'non-freestanding',
+      'trekking-pole',
+      'a-frame',
+      'tunnel',
+      'dome',
+      'pyramid',
+    ])
+    .optional(),
+  /** Size designation */
+  size: z.string().optional(),
 });
 
 export type GearSpecs = z.infer<typeof GearSpecsSchema>;
@@ -341,8 +372,111 @@ export class FirecrawlClient {
       fieldsFound++;
     }
 
-    // Calculate confidence based on fields found
-    specs.confidence = Math.min(fieldsFound / 7, 1);
+    // Extract person capacity (tents, hammocks)
+    const personsMatch = content.match(
+      /(\d+)\s*[-–]?\s*(?:person|man|p|personen|plätze|sleeps)/i
+    );
+    if (personsMatch) {
+      specs.capacityPersons = parseInt(personsMatch[1]!, 10);
+      fieldsFound++;
+    }
+
+    // Extract season rating
+    const seasonMatch = content.match(
+      /(?:season|jahreszeit)[:\s]*(3\.?5|3|4|summer|winter)[-\s]?season/i
+    );
+    if (seasonMatch) {
+      const rating = seasonMatch[1]!.toLowerCase();
+      if (rating === '3' || rating === '3.5' || rating === '4') {
+        specs.seasonRating = `${rating}-season` as typeof specs.seasonRating;
+      } else {
+        specs.seasonRating = rating as typeof specs.seasonRating;
+      }
+      fieldsFound++;
+    }
+
+    // Extract frame type (backpacks)
+    const contentLower = content.toLowerCase();
+    if (contentLower.includes('internal frame')) {
+      specs.frameType = 'internal';
+      fieldsFound++;
+    } else if (contentLower.includes('external frame')) {
+      specs.frameType = 'external';
+      fieldsFound++;
+    } else if (contentLower.includes('frameless')) {
+      specs.frameType = 'frameless';
+      fieldsFound++;
+    } else if (contentLower.includes('removable frame')) {
+      specs.frameType = 'removable';
+      fieldsFound++;
+    }
+
+    // Extract fuel type (stoves)
+    const fuelTypes: Array<{ pattern: RegExp; value: typeof specs.fuelType }> = [
+      { pattern: /canister\s*(?:stove|fuel|gas)/i, value: 'canister' },
+      { pattern: /alcohol\s*(?:stove|burner|fuel)/i, value: 'alcohol' },
+      { pattern: /wood\s*(?:burning|stove)/i, value: 'wood' },
+      { pattern: /esbit|solid\s*fuel/i, value: 'solid' },
+      { pattern: /multi[-\s]?fuel/i, value: 'multi-fuel' },
+      { pattern: /white\s*gas/i, value: 'white-gas' },
+      { pattern: /propane/i, value: 'propane' },
+    ];
+    for (const { pattern, value } of fuelTypes) {
+      if (pattern.test(content)) {
+        specs.fuelType = value;
+        fieldsFound++;
+        break;
+      }
+    }
+
+    // Extract connector type (electronics)
+    if (/usb[-\s]?c|type[-\s]?c/i.test(content)) {
+      specs.connectorType = 'usb-c';
+      fieldsFound++;
+    } else if (/usb[-\s]?a/i.test(content)) {
+      specs.connectorType = 'usb-a';
+      fieldsFound++;
+    } else if (/micro[-\s]?usb/i.test(content)) {
+      specs.connectorType = 'micro-usb';
+      fieldsFound++;
+    } else if (/mini[-\s]?usb/i.test(content)) {
+      specs.connectorType = 'usb-mini';
+      fieldsFound++;
+    } else if (/lightning/i.test(content)) {
+      specs.connectorType = 'lightning';
+      fieldsFound++;
+    }
+
+    // Extract construction type (tents)
+    const constructionTypes: Array<{ pattern: RegExp; value: typeof specs.constructionType }> = [
+      { pattern: /semi[-\s]?freestanding/i, value: 'semi-freestanding' },
+      { pattern: /non[-\s]?freestanding/i, value: 'non-freestanding' },
+      { pattern: /\bfreestanding\b/i, value: 'freestanding' },
+      { pattern: /trekking[-\s]?pole/i, value: 'trekking-pole' },
+      { pattern: /\ba[-\s]?frame\b/i, value: 'a-frame' },
+      { pattern: /\btunnel\b/i, value: 'tunnel' },
+      { pattern: /\bdome\b/i, value: 'dome' },
+      { pattern: /\bpyramid\b|\bmid\b/i, value: 'pyramid' },
+    ];
+    for (const { pattern, value } of constructionTypes) {
+      if (pattern.test(content)) {
+        specs.constructionType = value;
+        fieldsFound++;
+        break;
+      }
+    }
+
+    // Extract size
+    const sizeMatch = content.match(
+      /(?:size|größe)[:\s]*((?:X?S|S|M|L|X{1,3}L|regular|long|wide|short))/i
+    );
+    if (sizeMatch) {
+      specs.size = sizeMatch[1]!.toUpperCase();
+      fieldsFound++;
+    }
+
+    // Calculate confidence based on fields found (now 14 possible fields)
+    specs.confidence = Math.min(fieldsFound / 14, 1);
 
     return fieldsFound > 0 ? specs : null;
   }
@@ -373,6 +507,15 @@ export class FirecrawlClient {
       }
       if (specs.description && !merged.description) merged.description = specs.description;
 
+      // Category-specific specs
+      if (specs.capacityPersons && !merged.capacityPersons) merged.capacityPersons = specs.capacityPersons;
+      if (specs.seasonRating && !merged.seasonRating) merged.seasonRating = specs.seasonRating;
+      if (specs.frameType && !merged.frameType) merged.frameType = specs.frameType;
+      if (specs.fuelType && !merged.fuelType) merged.fuelType = specs.fuelType;
+      if (specs.connectorType && !merged.connectorType) merged.connectorType = specs.connectorType;
+      if (specs.constructionType && !merged.constructionType) merged.constructionType = specs.constructionType;
+      if (specs.size && !merged.size) merged.size = specs.size;
+
       // Merge materials
       if (specs.materials) {
         merged.materials = [...new Set([...(merged.materials || []), ...specs.materials])];
@@ -384,7 +527,7 @@ export class FirecrawlClient {
       }
     }
 
-    // Calculate overall confidence
+    // Calculate overall confidence (14 possible fields now)
     let fieldsPopulated = 0;
     if (merged.weight) fieldsPopulated++;
     if (merged.price) fieldsPopulated++;
@@ -393,8 +536,15 @@ export class FirecrawlClient {
     if (merged.temperatureRating) fieldsPopulated++;
     if (merged.materials?.length) fieldsPopulated++;
     if (merged.brand) fieldsPopulated++;
+    if (merged.capacityPersons) fieldsPopulated++;
+    if (merged.seasonRating) fieldsPopulated++;
+    if (merged.frameType) fieldsPopulated++;
+    if (merged.fuelType) fieldsPopulated++;
+    if (merged.connectorType) fieldsPopulated++;
+    if (merged.constructionType) fieldsPopulated++;
+    if (merged.size) fieldsPopulated++;
 
-    merged.confidence = fieldsPopulated / 7;
+    merged.confidence = fieldsPopulated / 14;
 
     return merged;
   }

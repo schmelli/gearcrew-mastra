@@ -1,6 +1,9 @@
 /**
  * T068: Enricher Agent
  * Implements FR-020: Agent for autonomous data enrichment
+ *
+ * Uses category-specific specs configuration to determine
+ * which fields are relevant for each product type.
  */
 
 import { z } from 'zod';
@@ -8,6 +11,13 @@ import { FirecrawlClient, GearSpecs } from '../tools/firecrawl/web-search';
 import { ContentExtractor } from '../tools/firecrawl/content-extractor';
 import { getAuditLogger } from '@/lib/audit-logger';
 import { getMemgraphClient } from '@/lib/memgraph-client';
+import {
+  getSpecsForCategory,
+  getSpecFieldMeta,
+  buildResearchPrompt,
+  validateEnrichmentResult,
+  type SpecField,
+} from '@/config/enrichment-specs';
 
 // Configuration
 const ENRICHMENT_CONFIG = {
@@ -23,9 +33,11 @@ const ENRICHMENT_CONFIG = {
 // Schemas
 export const EnrichmentRequestSchema = z.object({
   nodeId: z.string(),
-  nodeType: z.enum(['Product', 'Brand', 'Category']),
+  nodeType: z.enum(['Product', 'Brand', 'Category', 'GearItem']),
   currentData: z.record(z.unknown()),
   missingFields: z.array(z.string()),
+  /** Category path for determining which specs are relevant (e.g., "shelter/tents") */
+  categoryPath: z.string().optional(),
   priority: z.number().min(0).max(1).default(0.5),
 });
 
@@ -55,6 +67,41 @@ export class EnricherAgent {
   constructor() {
     this.firecrawl = new FirecrawlClient();
     this.extractor = new ContentExtractor();
+  }
+
+  /**
+   * Determine which specs are missing for a node based on its category
+   * @param currentData - Current node data
+   * @param categoryPath - Category path (e.g., "shelter/tents")
+   * @returns Array of missing spec field names
+   */
+  getMissingSpecsForCategory(
+    currentData: Record<string, unknown>,
+    categoryPath: string
+  ): SpecField[] {
+    const requiredSpecs = getSpecsForCategory(categoryPath);
+    const missing: SpecField[] = [];
+
+    for (const spec of requiredSpecs) {
+      const value = currentData[spec];
+      // Consider null, undefined, empty string, or 0 as missing
+      if (value === null || value === undefined || value === '' || value === 0) {
+        missing.push(spec);
+      }
+    }
+
+    return missing;
+  }
+
+  /**
+   * Get the research prompt for a node based on its category
+   */
+  getResearchPrompt(
+    productName: string,
+    brandName: string | null,
+    categoryPath: string
+  ): string {
+    return buildResearchPrompt(productName, brandName, categoryPath);
   }
 
   /**
@@ -351,6 +398,80 @@ export class EnricherAgent {
             enrichedFields.push('brand');
           } else {
             skippedFields.push('brand');
+          }
+          break;
+
+        case 'capacity_persons':
+          if (specs.capacityPersons) {
+            updates.capacity_persons = specs.capacityPersons;
+            enrichedFields.push('capacity_persons');
+          } else {
+            skippedFields.push('capacity_persons');
+          }
+          break;
+
+        case 'season_rating':
+          if (specs.seasonRating) {
+            updates.season_rating = specs.seasonRating;
+            enrichedFields.push('season_rating');
+          } else {
+            skippedFields.push('season_rating');
+          }
+          break;
+
+        case 'frame_type':
+          if (specs.frameType) {
+            updates.frame_type = specs.frameType;
+            enrichedFields.push('frame_type');
+          } else {
+            skippedFields.push('frame_type');
+          }
+          break;
+
+        case 'fuel_type':
+          if (specs.fuelType) {
+            updates.fuel_type = specs.fuelType;
+            enrichedFields.push('fuel_type');
+          } else {
+            skippedFields.push('fuel_type');
+          }
+          break;
+
+        case 'connector_type':
+          if (specs.connectorType) {
+            updates.connector_type = specs.connectorType;
+            enrichedFields.push('connector_type');
+          } else {
+            skippedFields.push('connector_type');
+          }
+          break;
+
+        case 'construction_type':
+          if (specs.constructionType) {
+            updates.construction_type = specs.constructionType;
+            enrichedFields.push('construction_type');
+          } else {
+            skippedFields.push('construction_type');
+          }
+          break;
+
+        case 'size':
+          if (specs.size) {
+            updates.size = specs.size;
+            enrichedFields.push('size');
+          } else {
+            skippedFields.push('size');
+          }
+          break;
+
+        case 'volume_liters':
+          if (specs.capacity) {
+            // Convert to liters (same as capacity)
+            const liters = this.convertToLiters(specs.capacity.value, specs.capacity.unit);
+            updates.volume_liters = liters;
+            enrichedFields.push('volume_liters');
+          } else {
+            skippedFields.push('volume_liters');
           }
           break;
 
