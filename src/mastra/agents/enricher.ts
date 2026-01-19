@@ -513,11 +513,19 @@ export class EnricherAgent {
 
     const query = `
       MATCH (n:${nodeType} {${idField}: $nodeId})
-      SET ${setClause}, n.last_enriched_at = $enrichedAt
+      SET ${setClause}
       RETURN n
     `;
 
-    await client.writeTransaction(query, { nodeId, enrichedAt: new Date().toISOString(), ...updates });
+    console.log(`[ENRICHER] Applying updates to ${nodeType} ${nodeId}: query=${query.replace(/\s+/g, ' ')}, params=${JSON.stringify({ nodeId, ...updates })}`);
+
+    try {
+      await client.writeTransaction(query, { nodeId, ...updates });
+      console.log(`[ENRICHER] Successfully updated ${nodeId}`);
+    } catch (error) {
+      console.error(`[ENRICHER] Failed to update ${nodeId}:`, error);
+      throw error;
+    }
   }
 
   /**
