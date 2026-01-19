@@ -18,6 +18,11 @@ import {
   validateEnrichmentResult,
   type SpecField,
 } from '@/config/enrichment-specs';
+import {
+  getProductTypes,
+  findProductTypesByFuzzyMatch,
+  type ProductType,
+} from '@/mastra/services/product-types';
 
 // Configuration
 const ENRICHMENT_CONFIG = {
@@ -106,6 +111,76 @@ export class EnricherAgent {
   }
 
   /**
+   * Select the best matching ProductType for a gear item
+   * Uses fuzzy matching based on name, brand, category, and extracted specs
+   */
+  async selectProductType(
+    name: string,
+    brand: string | null,
+    category: string | null,
+    specs: GearSpecs | null
+  ): Promise<{ productType: ProductType; confidence: number } | null> {
+    // Build search query from available data
+    const queryParts: string[] = [];
+
+    // Use category from specs if available
+    if (specs?.category) {
+      queryParts.push(specs.category);
+    } else if (category) {
+      queryParts.push(category);
+    }
+
+    // Add product-specific keywords from name
+    if (name) {
+      // Extract potential category words from name (e.g., "tent", "backpack", "stove")
+      const categoryKeywords = [
+        'tent', 'tarp', 'shelter', 'bivy', 'hammock',
+        'backpack', 'pack', 'bag', 'daypack', 'rucksack',
+        'sleeping bag', 'quilt', 'blanket',
+        'pad', 'mattress', 'mat',
+        'stove', 'burner', 'cooker',
+        'pot', 'pan', 'cookware', 'mug', 'cup',
+        'filter', 'purifier', 'bottle',
+        'jacket', 'pants', 'shirt', 'shorts', 'hoodie',
+        'boots', 'shoes', 'sandals',
+        'headlamp', 'lantern', 'light', 'flashlight',
+        'trekking poles', 'poles',
+        'knife', 'multitool', 'axe',
+        'first aid', 'kit',
+      ];
+
+      const nameLower = name.toLowerCase();
+      for (const keyword of categoryKeywords) {
+        if (nameLower.includes(keyword)) {
+          queryParts.push(keyword);
+          break;
+        }
+      }
+    }
+
+    // If no query parts, try with full name
+    if (queryParts.length === 0) {
+      queryParts.push(name);
+    }
+
+    const query = queryParts.join(' ');
+    const matches = await findProductTypesByFuzzyMatch(query, 3);
+
+    if (matches.length === 0) {
+      console.log(`[Enricher] No ProductType match found for "${name}"`);
+      return null;
+    }
+
+    const bestMatch = matches[0]!;
+    console.log(`[Enricher] ProductType match for "${name}": ${bestMatch.productType.label} (${Math.round(bestMatch.score * 100)}%)`);
+
+    return {
+      productType: bestMatch.productType,
+      confidence: bestMatch.score,
+    };
+  }
+
+  /**
    * Enrich a single node with missing data
    */
   async enrichNode(request: EnrichmentRequest): Promise<EnrichmentResult> {
@@ -179,9 +254,24 @@ export class EnricherAgent {
         };
       }
 
+      // Select ProductType if not already set
+      let productTypeMatch: { productType: ProductType; confidence: number } | null = null;
+      if (!currentData.productTypeId && !currentData.productType) {
+        const category = (currentData.category as string) ?? null;
+        productTypeMatch = await this.selectProductType(name, brand ?? null, category, searchResult.specs);
+
+        if (productTypeMatch && productTypeMatch.confidence >= 0.5) {
+          updates.productTypeId = productTypeMatch.productType.id;
+          updates.productType = productTypeMatch.productType.label;
+          updates.productTypeSlug = productTypeMatch.productType.slug;
+          updates.productTypeConfidence = productTypeMatch.confidence;
+          enrichedFields.push('productType');
+        }
+      }
+
       // Apply updates to graph
       if (enrichedFields.length > 0) {
-        await this.applyEnrichment(nodeId, nodeType, updates);
+        await this.applyEnrichment(nodeId, nodeType, updates, productTypeMatch?.productType);
       }
 
       return {
@@ -514,11 +604,13 @@ export class EnricherAgent {
 
   /**
    * Apply enrichment updates to the graph
+   * Creates IS_TYPE relationship if productType is provided
    */
   private async applyEnrichment(
     nodeId: string,
     nodeType: string,
-    updates: Record<string, unknown>
+    updates: Record<string, unknown>,
+    productType?: ProductType
   ): Promise<void> {
     const client = getMemgraphClient();
 
@@ -537,6 +629,29 @@ export class EnricherAgent {
     `;
 
     await client.writeTransaction(query, { nodeId, ...updates });
+
+    // Create IS_TYPE relationship if ProductType was matched
+    if (productType) {
+      const relationshipQuery = `
+        MATCH (g:${nodeType} {${idField}: $nodeId})
+        MERGE (pt:ProductType {id: $productTypeId})
+        ON CREATE SET pt.label = $productTypeLabel, pt.slug = $productTypeSlug
+        MERGE (g)-[r:IS_TYPE]->(pt)
+        SET r.confidence = $confidence, r.assignedAt = $assignedAt
+        RETURN g, pt
+      `;
+
+      await client.writeTransaction(relationshipQuery, {
+        nodeId,
+        productTypeId: productType.id,
+        productTypeLabel: productType.label,
+        productTypeSlug: productType.slug,
+        confidence: updates.productTypeConfidence ?? 0,
+        assignedAt: new Date().toISOString(),
+      });
+
+      console.log(`[Enricher] Created IS_TYPE relationship: ${nodeId} -> ${productType.label}`);
+    }
   }
 
   /**

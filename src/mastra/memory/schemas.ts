@@ -200,6 +200,25 @@ CREATE TABLE IF NOT EXISTS semantic_patterns (
   updated_at TEXT NOT NULL
 );
 
+-- Firecrawl Response Cache Table
+CREATE TABLE IF NOT EXISTS firecrawl_cache (
+  id TEXT PRIMARY KEY,
+  query_hash TEXT NOT NULL UNIQUE,
+  query_text TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  source_urls TEXT,
+  confidence REAL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+-- Config Cache Table (for ProductTypes, etc.)
+CREATE TABLE IF NOT EXISTS config_cache (
+  key TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  fetched_at TEXT NOT NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_type ON workflow_runs(workflow_type);
@@ -216,6 +235,8 @@ CREATE INDEX IF NOT EXISTS idx_semantic_memory_category ON semantic_memory(categ
 CREATE INDEX IF NOT EXISTS idx_confidence_calibration_agent ON confidence_calibration(agent_id, action_type);
 CREATE INDEX IF NOT EXISTS idx_semantic_patterns_type ON semantic_patterns(pattern_type);
 CREATE INDEX IF NOT EXISTS idx_semantic_patterns_condition ON semantic_patterns(condition_field, condition_value);
+CREATE INDEX IF NOT EXISTS idx_firecrawl_cache_hash ON firecrawl_cache(query_hash);
+CREATE INDEX IF NOT EXISTS idx_firecrawl_cache_expires ON firecrawl_cache(expires_at);
 `;
 
 /**

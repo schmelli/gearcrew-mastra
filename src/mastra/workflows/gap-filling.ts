@@ -9,6 +9,8 @@ import { getEnricherAgent, EnrichmentRequest, EnrichmentResult } from '../agents
 import { getAuditLogger } from '@/lib/audit-logger';
 import { getLibSQLClient } from '../index';
 import { getMemgraphClient } from '@/lib/memgraph-client';
+import { preloadProductTypes } from '@/mastra/services/product-types';
+import { cleanupExpiredCache as cleanupFirecrawlCache } from '@/mastra/tools/firecrawl/cache';
 
 // Workflow configuration
 const WORKFLOW_CONFIG = {
@@ -105,6 +107,14 @@ export async function executeGapFillingWorkflow(
   });
 
   try {
+    // Pre-warm caches before starting enrichment
+    console.log('[Gap-Filling] Pre-warming caches...');
+    const [productTypesCount] = await Promise.all([
+      preloadProductTypes(),
+      cleanupFirecrawlCache(),
+    ]);
+    console.log(`[Gap-Filling] ProductTypes cache loaded: ${productTypesCount} types`);
+
     // Phase 1: Scan for nodes needing enrichment
     state.phase = 'scan';
     const candidates = await scanForCandidates(options);

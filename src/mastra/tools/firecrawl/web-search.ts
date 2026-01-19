@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { getCachedGearResult, setCachedGearResult } from './cache';
 
 // Configuration schema
 export const FirecrawlConfigSchema = z.object({
@@ -215,8 +216,19 @@ export class FirecrawlClient {
 
   /**
    * Search for gear specifications and extract structured data
+   * Uses cache to reduce API costs (TTL configurable via FIRECRAWL_CACHE_TTL_DAYS)
    */
   async searchGearSpecs(gearName: string, brand?: string): Promise<GearSearchResult> {
+    // Check cache first
+    const cached = await getCachedGearResult(gearName, brand);
+    if (cached) {
+      return {
+        success: cached.specs !== null,
+        specs: cached.specs,
+        sources: cached.sources,
+      };
+    }
+
     const query = brand ? `${brand} ${gearName} specifications weight dimensions` : `${gearName} specifications weight dimensions outdoor gear`;
 
     const searchResult = await this.search(query, {
@@ -225,6 +237,8 @@ export class FirecrawlClient {
     });
 
     if (!searchResult.success || searchResult.results.length === 0) {
+      // Cache negative result to avoid repeated lookups
+      await setCachedGearResult(gearName, brand, null, []);
       return {
         success: false,
         error: 'No results found',
@@ -245,6 +259,9 @@ export class FirecrawlClient {
     }
 
     if (extractedSpecs.length === 0) {
+      // Cache negative result
+      const sources = searchResult.results.map((r) => r.url);
+      await setCachedGearResult(gearName, brand, null, sources);
       return {
         success: false,
         error: 'Could not extract specifications from search results',
@@ -254,11 +271,15 @@ export class FirecrawlClient {
 
     // Merge specs from multiple sources, preferring higher confidence
     const mergedSpecs = this.mergeGearSpecs(extractedSpecs);
+    const sources = extractedSpecs.map((s) => s.sourceUrl).filter(Boolean) as string[];
+
+    // Cache successful result
+    await setCachedGearResult(gearName, brand, mergedSpecs, sources);
 
     return {
       success: true,
       specs: mergedSpecs,
-      sources: extractedSpecs.map((s) => s.sourceUrl).filter(Boolean) as string[],
+      sources,
     };
   }
 
