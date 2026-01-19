@@ -302,7 +302,9 @@ async function scanForCandidates(options?: GapFillingOptions): Promise<Enrichmen
   }
 
   if (options?.scope?.minCentrality) {
-    conditions.push('size((n)--()) >= $minCentrality');
+    // Note: This filter requires a subquery in Memgraph
+    // conditions.push('size((n)--()) >= $minCentrality');
+    // Centrality filtering is done post-query in prioritizeByCentrality
     params.minCentrality = options.scope.minCentrality;
   }
 
@@ -374,7 +376,8 @@ async function prioritizeByCentrality(
   const query = `
     UNWIND $nodeIds as nodeId
     MATCH (n:GearItem {gearId: nodeId})
-    WITH n, size((n)--()) as degree
+    OPTIONAL MATCH (n)-[r]-()
+    WITH n, count(r) as degree
     RETURN n.gearId as nodeId, degree
   `;
 
