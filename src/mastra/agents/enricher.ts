@@ -130,6 +130,7 @@ export class EnricherAgent {
       }
 
       const searchResult = await this.firecrawl.searchGearSpecs(name, brand);
+      console.log(`[ENRICHER] Node: ${nodeId}, Search result: ${JSON.stringify({ success: searchResult.success, hasSpecs: !!searchResult.specs, confidence: searchResult.specs?.confidence, weight: searchResult.specs?.weight })}`);
 
       if (!searchResult.success || !searchResult.specs) {
         return {
@@ -147,6 +148,7 @@ export class EnricherAgent {
         searchResult.specs,
         missingFields
       );
+      console.log(`[ENRICHER] Node: ${nodeId}, Mapped: enriched=${JSON.stringify(enrichedFields)}, updates=${JSON.stringify(updates)}`);
 
       // Check confidence threshold
       if ((searchResult.specs.confidence || 0) < ENRICHMENT_CONFIG.confidenceThreshold) {
