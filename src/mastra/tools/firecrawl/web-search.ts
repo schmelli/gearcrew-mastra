@@ -274,15 +274,30 @@ export class FirecrawlClient {
 
     let fieldsFound = 0;
 
-    // Extract weight
-    const weightMatch = content.match(
-      /(?:weight|wt\.?)[:\s]*(\d+(?:\.\d+)?)\s*(g|kg|oz|lbs?|ounces?|grams?|kilograms?)/i
-    );
-    if (weightMatch) {
-      const value = parseFloat(weightMatch[1]!);
-      const unit = normalizeWeightUnit(weightMatch[2]!);
-      specs.weight = { value, unit };
-      fieldsFound++;
+    // Extract weight - handle markdown formatting and various patterns
+    const weightPatterns = [
+      // Standard format: "weight: 12.7 oz" or "Weight 288g"
+      /(?:weight|wt\.?)[:\s]*(\d+(?:\.\d+)?)\s*(g|kg|oz|lbs?|ounces?|grams?|kilograms?)/i,
+      // Format with newline/markdown: "Weight\n12.7 oz"
+      /(?:weight|wt\.?)\s*[)\]\n\s]+(\d+(?:\.\d+)?)\s*(g|kg|oz|lbs?|ounces?|grams?|kilograms?)/i,
+      // Standalone weight value: "12.7 oz" or "(288g)"
+      /\((\d+(?:\.\d+)?)\s*(g|kg|oz|lbs?|ounces?|grams?|kilograms?)\)/i,
+      // Weight with parentheses: "10.2 oz (288g)"
+      /(\d+(?:\.\d+)?)\s*(oz|lbs?|ounces?)\s*\((\d+(?:\.\d+)?)\s*(g|grams?)\)/i,
+    ];
+
+    for (const pattern of weightPatterns) {
+      const match = content.match(pattern);
+      if (match) {
+        // Handle pattern with oz (g) format
+        if (match[3] && match[4]) {
+          specs.weight = { value: parseFloat(match[3]), unit: normalizeWeightUnit(match[4]) };
+        } else {
+          specs.weight = { value: parseFloat(match[1]!), unit: normalizeWeightUnit(match[2]!) };
+        }
+        fieldsFound++;
+        break;
+      }
     }
 
     // Extract price
