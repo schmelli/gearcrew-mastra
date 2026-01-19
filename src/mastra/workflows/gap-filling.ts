@@ -309,12 +309,12 @@ async function scanForCandidates(options?: GapFillingOptions): Promise<Enrichmen
   const whereClause = conditions.join(' AND ');
 
   const query = `
-    MATCH (n:Product)
+    MATCH (n:GearItem)
     WHERE ${whereClause}
-    RETURN n.id as nodeId,
+    RETURN n.gearId as nodeId,
            n.name as name,
            n.brand as brand,
-           n.category as category,
+           n.productType as category,
            n.weight_grams as weight,
            n.price as price,
            n.dimensions_cm as dimensions,
@@ -347,13 +347,14 @@ async function scanForCandidates(options?: GapFillingOptions): Promise<Enrichmen
 
     return {
       nodeId: record.nodeId,
-      nodeType: 'Product' as const,
+      nodeType: 'GearItem' as const,
       currentData: {
         name: record.name,
         brand: record.brand,
         category: record.category,
       },
       missingFields,
+      categoryPath: record.category ? `miscellaneous/${record.category.toLowerCase().replace(/\s+/g, '-')}` : undefined,
       priority: 0.5, // Will be updated by prioritization
     };
   });
@@ -372,9 +373,9 @@ async function prioritizeByCentrality(
 
   const query = `
     UNWIND $nodeIds as nodeId
-    MATCH (n:Product {id: nodeId})
+    MATCH (n:GearItem {gearId: nodeId})
     WITH n, size((n)--()) as degree
-    RETURN n.id as nodeId, degree
+    RETURN n.gearId as nodeId, degree
   `;
 
   interface CentralityResult {
