@@ -19,11 +19,12 @@ import { registerAgent } from '../index';
 // ============================================================================
 
 // Using Vercel AI Gateway for cost-effective model access
-// Gemini 2.5 Flash: $0.10/1M input, $0.40/1M output (vs Claude Sonnet: $3/$15)
-// Gateway URL format: https://ai-gateway.vercel.sh/v1/ai/{provider}
+// Gemini 3 Flash: Fast, efficient, pro-grade reasoning at flash-level latency
+// 30% less tokens and 3x faster than Gemini 2.5
+// Gateway URL format: https://ai-gateway.vercel.sh/v1
 const VERCEL_AI_GATEWAY_MODEL = {
   url: process.env.AI_GATEWAY_BASE_URL ?? 'https://ai-gateway.vercel.sh/v1',
-  id: 'google/gemini-2.5-flash-preview-05-20' as const,
+  id: 'google/gemini-3-flash' as const,
   apiKey: process.env.AI_GATEWAY_API_KEY ?? '',
 };
 
@@ -93,9 +94,9 @@ let headGardenerAgentInstance: Agent | null = null;
  */
 export function getHeadGardenerAgentV2(): Agent {
   if (!headGardenerAgentInstance) {
-    // Use Gemini 2.5 Flash via Vercel AI Gateway
-    // Excellent for tool calling, very cost-effective
-    // Pricing: $0.10/1M input, $0.40/1M output tokens
+    // Use Gemini 3 Flash via Vercel AI Gateway
+    // Excellent for tool calling, very fast and cost-effective
+    // Pro-grade reasoning at flash-level latency
     headGardenerAgentInstance = new Agent({
       id: 'head-gardener-v2',
       name: 'Head Gardener',
