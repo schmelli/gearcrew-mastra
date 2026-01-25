@@ -22,7 +22,7 @@ import { registerAgent } from '../index';
 // Gemini 2.5 Flash: $0.10/1M input, $0.40/1M output (vs Claude Sonnet: $3/$15)
 // Gateway URL format: https://ai-gateway.vercel.sh/v1/ai/{provider}
 const VERCEL_AI_GATEWAY_MODEL = {
-  url: process.env.AI_GATEWAY_BASE_URL ?? 'https://ai-gateway.vercel.sh/v1/ai',
+  url: process.env.AI_GATEWAY_BASE_URL ?? 'https://ai-gateway.vercel.sh/v1',
   id: 'google/gemini-2.5-flash-preview-05-20' as const,
   apiKey: process.env.AI_GATEWAY_API_KEY ?? '',
 };
