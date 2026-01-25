@@ -9,11 +9,23 @@
  */
 
 import { Agent } from '@mastra/core/agent';
-import { createDeepSeek } from '@ai-sdk/deepseek';
 import { headGardenerToolkit } from '../tools';
 import { registerAgent } from '../index';
 // Note: Memory integration pending @mastra/memory package version alignment
 // import { getConversationMemory } from '../memory/mastra-memory';
+
+// ============================================================================
+// Model Configuration - Vercel AI Gateway
+// ============================================================================
+
+// Using Vercel AI Gateway for cost-effective model access
+// Gemini 2.5 Flash: $0.10/1M input, $0.40/1M output (vs Claude Sonnet: $3/$15)
+// Gateway URL format: https://ai-gateway.vercel.sh/v1/ai/{provider}
+const VERCEL_AI_GATEWAY_MODEL = {
+  url: process.env.AI_GATEWAY_BASE_URL ?? 'https://ai-gateway.vercel.sh/v1/ai',
+  id: 'google/gemini-2.5-flash-preview-05-20' as const,
+  apiKey: process.env.AI_GATEWAY_API_KEY ?? '',
+};
 
 // ============================================================================
 // System Prompt
@@ -81,15 +93,14 @@ let headGardenerAgentInstance: Agent | null = null;
  */
 export function getHeadGardenerAgentV2(): Agent {
   if (!headGardenerAgentInstance) {
-    const deepseek = createDeepSeek({
-      apiKey: process.env.DEEPSEEK_API_KEY ?? '',
-    });
-
+    // Use Gemini 2.5 Flash via Vercel AI Gateway
+    // Excellent for tool calling, very cost-effective
+    // Pricing: $0.10/1M input, $0.40/1M output tokens
     headGardenerAgentInstance = new Agent({
       id: 'head-gardener-v2',
       name: 'Head Gardener',
       instructions: SYSTEM_PROMPT,
-      model: deepseek('deepseek-chat'),
+      model: VERCEL_AI_GATEWAY_MODEL,
       tools: headGardenerToolkit,
       // Note: Memory integration pending @mastra/memory package version alignment
       // memory: getConversationMemory(),

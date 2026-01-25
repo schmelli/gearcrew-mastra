@@ -67,8 +67,9 @@ export async function POST(request: NextRequest) {
               })}\n\n`)
             );
 
-            // Stream the response
-            const agentStream = await agent.stream(message, {
+            // Stream the response using legacy method (AI SDK v4 compatibility)
+            // Note: Use streamLegacy() until @mastra/core upgrades to AI SDK v5
+            const agentStream = await agent.streamLegacy(message, {
               threadId,
               resourceId,
             });
