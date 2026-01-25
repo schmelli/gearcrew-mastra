@@ -262,7 +262,7 @@ function extractVariant(name: string): string {
 
   // Size
   const sizeMatch = name.match(/\b(XXS|XS|S|M|L|XL|XXL|XXXL|Regular|Long|Short|Wide|Narrow)\b/i);
-  if (sizeMatch) {
+  if (sizeMatch && sizeMatch[1]) {
     variants.push(sizeMatch[1]);
   }
 
@@ -366,8 +366,7 @@ async function cleanupGenericItems(
             'GearItem',
             {
               confidence: analysis.confidence,
-              reasoning: `Generic item without brand: ${analysis.reason}`,
-              suggestedAction: 'delete',
+              reasoning: `Generic item without brand: ${analysis.reason}. Suggested: delete`,
             }
           );
         }
@@ -387,8 +386,7 @@ async function cleanupGenericItems(
             'GearItem',
             {
               confidence: analysis.confidence,
-              reasoning: `Needs manual review: ${analysis.reason}`,
-              suggestedAction: 'review',
+              reasoning: `Needs manual review: ${analysis.reason}. Suggested: review`,
             }
           );
         }
@@ -493,7 +491,7 @@ async function analyzeItemName(
   try {
     const searchQuery = `"${name}" outdoor gear brand company`;
     const searchResult = await firecrawl.search(searchQuery, {
-      searchOptions: { limit: 3 },
+      limit: 3,
     });
 
     if (searchResult.success && searchResult.results.length > 0) {
@@ -749,8 +747,7 @@ async function processWithAgentPipeline(
         'GearItem',
         {
           confidence: item.priorityScore / 100,
-          reasoning: item.reasoning,
-          suggestedAction: 'review',
+          reasoning: `${item.reasoning}. Suggested: review`,
         }
       );
     }

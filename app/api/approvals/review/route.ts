@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { getMemgraphClient } from '@/lib/memgraph-client';
 
 interface ReviewItem {
@@ -297,50 +297,49 @@ export async function POST(request: NextRequest) {
       approve: 'approved',
       reject: 'rejected',
       delete: 'deleted',
+      skip: 'skipped',
     };
     const issueStatusMap: Record<string, string> = {
       approve: 'resolved',
       reject: 'dismissed',
       delete: 'resolved',
+      skip: 'deferred',
     };
 
     // Update the approval status
     const resolvedAt = new Date().toISOString();
+    const approvalStatus = statusMap[decision] ?? 'pending';
     await db.execute({
       sql: `
         UPDATE approval_requests
         SET status = ?, resolved_at = ?, resolved_by = ?, resolution = ?, resolution_notes = ?
         WHERE id = ?
       `,
-      args: [
-        statusMap[decision],
-        resolvedAt,
-        'admin', // Would be actual user in production
-        decision,
-        notes ?? null,
-        approvalId,
-      ],
+      args: [approvalStatus, resolvedAt, 'admin', decision, notes ?? null, approvalId],
     });
 
-    // Update the associated issue
-    await db.execute({
-      sql: `
-        UPDATE gardening_issues
-        SET status = ?, resolved_by = ?, resolved_at = ?, resolution = ?
-        WHERE id = ?
-      `,
-      args: [
-        issueStatusMap[decision],
-        'admin',
-        resolvedAt,
+    // Update the associated issue (if one exists)
+    const issueId = approval.issue_id as string | null;
+    if (issueId) {
+      const issueStatus = issueStatusMap[decision] ?? 'pending';
+      const resolution =
         decision === 'approve'
           ? `Approved: ${approval.proposed_action}`
           : decision === 'delete'
             ? `Deleted: ${notes ?? 'Identified as junk/invalid data'}`
-            : `Rejected: ${notes ?? 'No reason provided'}`,
-        approval.issue_id,
-      ],
-    });
+            : decision === 'skip'
+              ? `Skipped: ${notes ?? 'Deferred for later review'}`
+              : `Rejected: ${notes ?? 'No reason provided'}`;
+
+      await db.execute({
+        sql: `
+          UPDATE gardening_issues
+          SET status = ?, resolved_by = ?, resolved_at = ?, resolution = ?
+          WHERE id = ?
+        `,
+        args: [issueStatus, 'admin', resolvedAt, resolution, issueId],
+      });
+    }
 
     // Execute action based on decision
     let actionResult = null;

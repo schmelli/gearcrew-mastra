@@ -5,7 +5,18 @@
 
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import { getLibSQLClient } from '../index';
+import { createClient } from '@libsql/client';
+
+// Direct LibSQL client to avoid circular import with mastra/index
+let libsqlClient: ReturnType<typeof createClient> | null = null;
+function getLibSQLClient(): ReturnType<typeof createClient> {
+  if (!libsqlClient) {
+    libsqlClient = createClient({
+      url: process.env.LIBSQL_URL ?? 'file:/data/memory.db',
+    });
+  }
+  return libsqlClient;
+}
 
 // Correction rule types
 export const CorrectionRuleTypeSchema = z.enum([

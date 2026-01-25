@@ -6,7 +6,7 @@
 
 import { randomUUID } from 'crypto';
 import { getMemgraphClient } from '@/lib/memgraph-client';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { getAuditLogger } from '@/lib/audit-logger';
 import { registerWorkflow } from '../index';
 import {

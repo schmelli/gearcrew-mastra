@@ -100,6 +100,7 @@ describe('Manual Workflow Trigger - Integration Test', () => {
         deletedOrphans: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
         flaggedOrphans: ['node-6', 'node-7'],
         schemaViolations: 0,
+        brandInNameFixed: 0,
         duration: 1500,
       });
 

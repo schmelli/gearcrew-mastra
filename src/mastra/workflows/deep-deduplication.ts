@@ -15,7 +15,8 @@ import {
 import { scanForDuplicates, enrichCandidateWithRelationships } from '../tools/analysis/vector-similarity';
 import { getResolverAgent, EvaluationResult } from '../agents/resolver';
 import { getAuditLogger } from '@/lib/audit-logger';
-import { registerWorkflow, getLibSQLClient } from '../index';
+import { registerWorkflow } from '../index';
+import { getLibSQLClient } from '@/lib/db';
 
 /**
  * Workflow context passed between steps

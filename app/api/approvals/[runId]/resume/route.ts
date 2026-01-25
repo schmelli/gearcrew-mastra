@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 import { z } from 'zod';
 import { ResumeRequestSchema } from '@/types';
 import { resumeDeduplicationWorkflow, getPendingApprovals } from '@/mastra/workflows/deep-deduplication';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 
 interface RouteParams {
   params: Promise<{ runId: string }>;

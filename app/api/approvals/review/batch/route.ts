@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { getMemgraphClient } from '@/lib/memgraph-client';
 
 interface BatchResult {

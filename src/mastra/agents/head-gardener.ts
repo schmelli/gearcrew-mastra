@@ -15,7 +15,8 @@ const deepseek = createDeepSeek({
   apiKey: process.env.DEEPSEEK_API_KEY ?? '',
 });
 
-import { registerAgent, getLibSQLClient } from '../index';
+import { registerAgent } from '../index';
+import { getLibSQLClient } from '@/lib/db';
 import { getWorkflowStatus, listWorkflowRuns, getLatestRuns } from '../tools/memgraph/workflow-status';
 import {
   listPendingDecisions,

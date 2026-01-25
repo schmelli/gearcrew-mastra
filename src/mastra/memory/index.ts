@@ -47,3 +47,15 @@ export type {
   DecisionResult,
   ApprovalDecision,
 } from './learning';
+
+// Mastra Memory Integration
+export {
+  getConversationMemory,
+  getResearchMemory,
+  WORKING_MEMORY_TEMPLATE,
+  RESEARCH_WORKING_MEMORY_TEMPLATE,
+  MEMORY_DB_URL,
+} from './mastra-memory';
+
+// Learning Bridge (Memory Processor)
+export { learningSystemProcessor } from './learning-bridge';

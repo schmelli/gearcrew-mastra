@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 import { z } from 'zod';
 import type { InValue } from '@libsql/client';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { GardeningIssue } from '@/types';
 
 const QuerySchema = z.object({

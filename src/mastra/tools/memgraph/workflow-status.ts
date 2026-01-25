@@ -4,7 +4,7 @@
  */
 
 import type { InValue } from '@libsql/client';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { WorkflowRun, WorkflowRunSchema } from '@/types';
 
 export interface WorkflowStatusResult {

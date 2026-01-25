@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { executeMorningHygieneWorkflow } from '../../workflows/morning-hygiene';
 import { executeDeduplicationWorkflow } from '../../workflows/deep-deduplication';
 import { executeEmbeddingWorkflow } from '../../workflows/embedding-generation';

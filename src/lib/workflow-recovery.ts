@@ -3,7 +3,7 @@
  * Implements FR-028: Recover workflow state on restart
  */
 
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { getAuditLogger } from './audit-logger';
 
 // ============================================================================

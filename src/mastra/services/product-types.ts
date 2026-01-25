@@ -3,7 +3,7 @@
  * Fetches ProductTypes (Level 3 categories) from Gearshack Supabase database
  */
 
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 
 // Supabase configuration
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'https://pxtvbgilzzppnbienmot.supabase.co';

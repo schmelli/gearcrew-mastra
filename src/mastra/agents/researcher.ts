@@ -238,17 +238,18 @@ export class ResearcherAgent {
       for (const query of queries) {
         try {
           const searchResult = await this.firecrawl.search(query, {
-            searchOptions: { limit: RESEARCHER_CONFIG.maxSearchResults },
-            pageOptions: { fetchPageContent: true, onlyMainContent: true },
+            limit: RESEARCHER_CONFIG.maxSearchResults,
+            scrapeOptions: { formats: ['markdown'] },
           });
 
           if (searchResult.success && searchResult.results) {
             for (const result of searchResult.results) {
-              if (result.content && result.content.length > 100) {
+              const content = result.markdown ?? '';
+              if (content.length > 100) {
                 allContent.push({
                   url: result.url,
-                  title: result.title,
-                  content: result.content.substring(0, 8000), // Limit content size
+                  title: result.title ?? 'Untitled',
+                  content: content.substring(0, 8000), // Limit content size
                 });
               }
             }
@@ -296,8 +297,8 @@ export class ResearcherAgent {
 
     try {
       const searchResult = await this.firecrawl.search(query, {
-        searchOptions: { limit: 10 },
-        pageOptions: { fetchPageContent: true, onlyMainContent: true },
+        limit: 10,
+        scrapeOptions: { formats: ['markdown'] },
       });
 
       if (!searchResult.success || searchResult.results.length === 0) {
@@ -307,11 +308,12 @@ export class ResearcherAgent {
       // Collect all content
       const allContent: Array<{ url: string; title: string; content: string }> = [];
       for (const result of searchResult.results) {
-        if (result.content && result.content.length > 100) {
+        const content = result.markdown ?? '';
+        if (content.length > 100) {
           allContent.push({
             url: result.url,
-            title: result.title,
-            content: result.content.substring(0, 8000),
+            title: result.title ?? 'Untitled',
+            content: content.substring(0, 8000),
           });
         }
       }
@@ -346,8 +348,8 @@ export class ResearcherAgent {
 
     try {
       const searchResult = await this.firecrawl.search(query, {
-        searchOptions: { limit: 3 },
-        pageOptions: { fetchPageContent: true, onlyMainContent: true },
+        limit: 3,
+        scrapeOptions: { formats: ['markdown'] },
       });
 
       if (!searchResult.success || searchResult.results.length === 0) {
@@ -357,7 +359,7 @@ export class ResearcherAgent {
       // Check if any result looks like an official brand page
       for (const result of searchResult.results) {
         const lowerUrl = result.url.toLowerCase();
-        const lowerTitle = result.title.toLowerCase();
+        const lowerTitle = (result.title ?? '').toLowerCase();
         const brandLower = brandName.toLowerCase().replace(/\s+/g, '');
 
         if (

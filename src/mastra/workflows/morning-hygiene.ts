@@ -209,10 +209,10 @@ async function flagOrphans(
       let proposedAction: 'delete' | 'enrich' | 'merge' = 'enrich';
       let actionDescription = '';
 
-      if (orphan.classification === 'empty_island' || orphan.classification === 'generic_no_brand') {
+      if (orphan.classification === 'empty' || orphan.classification === 'generic') {
         proposedAction = 'delete';
         actionDescription = `Delete this orphan node - it appears to be ${
-          orphan.classification === 'empty_island' ? 'an empty/minimal entry' : 'generic without brand info'
+          orphan.classification === 'empty' ? 'an empty/minimal entry' : 'generic without brand info'
         } and has no valuable connections.`;
       } else if (orphan.classification === 'small_island' || orphan.classification === 'large_island') {
         proposedAction = 'enrich';
@@ -320,9 +320,8 @@ async function flagOrphans(
           'GearItem',
           {
             confidence: orphan.confidence,
-            reasoning: orphan.reasoning,
+            reasoning: `${orphan.reasoning}. Approval: ${approvalId}`,
             issueId: issue.id,
-            approvalId,
           }
         );
       }
@@ -363,10 +362,10 @@ function buildProblemDescription(
   // What's the problem?
   parts.push('\n**Problem:**');
   switch (orphan.classification) {
-    case 'empty_island':
+    case 'empty':
       parts.push('This node is isolated with minimal data - no meaningful content or connections.');
       break;
-    case 'generic_no_brand':
+    case 'generic':
       parts.push('This appears to be a generic item without brand information, making it hard to identify.');
       break;
     case 'small_island':
@@ -375,7 +374,7 @@ function buildProblemDescription(
     case 'large_island':
       parts.push(`This node is part of a larger disconnected component that needs review (${orphan.reasoning}).`);
       break;
-    case 'valuable_content':
+    case 'valuable':
       parts.push('This node has valuable content but is not properly connected to the main graph.');
       break;
     default:

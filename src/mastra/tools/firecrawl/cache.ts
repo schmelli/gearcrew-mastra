@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'crypto';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import type { GearSpecs } from './web-search';
 
 // Cache TTL in days (default: 7 days)

@@ -14,7 +14,7 @@ import {
   getGapFillingStatus,
   GapFillingOptionsSchema,
 } from '@/mastra/workflows/gap-filling';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 
 const TriggerRequestSchema = z.object({
   scope: GapFillingOptionsSchema.shape.scope.optional(),

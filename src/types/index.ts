@@ -544,8 +544,9 @@ export interface CompletenessResult {
 
 /**
  * Correction rule types for learning from human feedback
+ * (Note: Renamed to avoid conflict with CorrectionRuleType from schemas)
  */
-export type CorrectionRuleType =
+export type LearningRuleType =
   | 'do_not_merge'
   | 'always_merge'
   | 'require_approval'
@@ -553,9 +554,10 @@ export type CorrectionRuleType =
   | 'brand_trust';
 
 /**
- * Correction rule pattern for matching
+ * Correction rule pattern for learning system matching
+ * (Note: Renamed to avoid conflict with CorrectionRulePattern from schemas)
  */
-export interface CorrectionRulePattern {
+export interface LearningRulePattern {
   similarityRange?: [number, number];
   properties?: string[];
   brandScope?: string;

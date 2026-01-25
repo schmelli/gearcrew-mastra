@@ -244,7 +244,6 @@ export class CuratorAgent {
         {
           confidence: findings.overallConfidence,
           reasoning: `Enriched from ${findings.sources.length} sources`,
-          source: 'curator',
         }
       );
 
@@ -1134,9 +1133,12 @@ export class CuratorAgent {
         workflowRunId,
         'deep-deduplication',
         primaryNodeId,
-        secondaryNodeId,
-        primaryBefore[0]?.props ?? {},
-        secondaryBefore[0]?.props ?? {},
+        'GearItem',
+        {
+          primary: primaryBefore[0]?.props ?? {},
+          secondary: secondaryBefore[0]?.props ?? {},
+          secondaryNodeId,
+        },
         mergedProperties,
         { confidence: 1.0, reasoning: 'Curator executed merge' }
       );

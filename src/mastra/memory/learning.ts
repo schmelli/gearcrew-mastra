@@ -9,9 +9,20 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { getLibSQLClient } from '../index';
-import { getCorrectionRulesManager } from './correction-rules';
+import { createClient } from '@libsql/client';
+import { getCorrectionRulesManager, type CorrectionRule } from './correction-rules';
 import type { CurationRequest } from '../../types';
+
+// Direct LibSQL client to avoid circular import with mastra/index
+let libsqlClient: ReturnType<typeof createClient> | null = null;
+function getLibSQLClient(): ReturnType<typeof createClient> {
+  if (!libsqlClient) {
+    libsqlClient = createClient({
+      url: process.env.LIBSQL_URL ?? 'file:/data/memory.db',
+    });
+  }
+  return libsqlClient;
+}
 
 // ============================================================================
 // Constants
@@ -765,7 +776,13 @@ export async function getLearningStatistics(): Promise<{
   recentDecisions: EpisodicMemoryRecord[];
   semanticPatternCount: number;
   highConfidencePatterns: SemanticPattern[];
-  correctionRuleStats: Awaited<ReturnType<typeof getCorrectionRulesManager>['getStatistics']>;
+  correctionRuleStats: {
+    totalRules: number;
+    activeRules: number;
+    rulesByType: Record<string, number>;
+    rulesBySource: Record<string, number>;
+    mostApplied: Array<{ rule: CorrectionRule; count: number }>;
+  };
 }> {
   const db = getLibSQLClient();
   const rulesManager = getCorrectionRulesManager();

@@ -1,14 +1,20 @@
 /**
  * Mastra Instance Configuration
  * Central configuration for the Graph Gardening agent framework
+ *
+ * This module provides:
+ * - Mastra instance with LibSQL storage
+ * - Agent and workflow registries
+ * - Shared memory context
+ * - Feature flags for gradual migration
  */
 
 import { Mastra } from '@mastra/core';
 import { LibSQLStore } from '@mastra/libsql';
-import { createClient } from '@libsql/client';
 import { MASTRA_MEMORY_CONFIG } from './memory/schemas';
 // Import getCorrectionRulesManager lazily to avoid circular dependency and build-time initialization
 import type { CorrectionRulesManager } from './memory/correction-rules';
+import { FEATURES } from '@/config/feature-flags';
 
 // ============================================================================
 // LibSQL Storage Configuration (Lazy Initialization)
@@ -114,18 +120,10 @@ export function listAgents(): string[] {
 
 // ============================================================================
 // LibSQL Client for Direct Access
+// Re-exported from @/lib/db to avoid circular imports
 // ============================================================================
 
-let libsqlClient: ReturnType<typeof createClient> | null = null;
-
-export function getLibSQLClient(): ReturnType<typeof createClient> {
-  if (!libsqlClient) {
-    libsqlClient = createClient({
-      url: process.env.LIBSQL_URL ?? 'file:/data/memory.db',
-    });
-  }
-  return libsqlClient;
-}
+export { getLibSQLClient } from '@/lib/db';
 
 // ============================================================================
 // Shared Memory Context (FR-018) with Learning System (Phase 7)
@@ -170,8 +168,62 @@ export function resetSharedMemoryContext(): void {
 }
 
 // ============================================================================
+// V2 Agent Getters (Mastra-native)
+// ============================================================================
+
+/**
+ * Get Head Gardener agent - returns v2 (Mastra) or v1 (legacy) based on feature flag
+ */
+export async function getHeadGardener() {
+  if (FEATURES.USE_MASTRA_AGENTS) {
+    const { getHeadGardenerAgentV2 } = await import('./agents/head-gardener-v2');
+    return getHeadGardenerAgentV2();
+  } else {
+    const { getHeadGardenerAgent } = await import('./agents/head-gardener');
+    return getHeadGardenerAgent();
+  }
+}
+
+/**
+ * Get Researcher agent - returns v2 (Mastra) or v1 (legacy) based on feature flag
+ */
+export async function getResearcher() {
+  if (FEATURES.USE_MASTRA_AGENTS) {
+    const { getResearcherAgentV2 } = await import('./agents/researcher-v2');
+    return getResearcherAgentV2();
+  } else {
+    const { getResearcherAgent } = await import('./agents/researcher');
+    return getResearcherAgent();
+  }
+}
+
+// ============================================================================
+// V2 Workflow Getters (Mastra-native)
+// ============================================================================
+
+/**
+ * Get Morning Hygiene workflow - returns v2 (Mastra) or v1 (legacy) based on feature flag
+ * Note: v1 returns a function, v2 returns a Mastra Workflow object
+ * Returns a Promise that resolves to the workflow
+ */
+export function getMorningHygieneWorkflow(): Promise<unknown> {
+  if (FEATURES.USE_MASTRA_WORKFLOWS) {
+    return import('./workflows/morning-hygiene-v2').then(m => m.morningHygieneWorkflowV2);
+  } else {
+    return import('./workflows/morning-hygiene').then(m => m.executeMorningHygieneWorkflow);
+  }
+}
+
+// ============================================================================
 // Exports
 // ============================================================================
 
 export { MASTRA_MEMORY_CONFIG };
+
+// Note: Removed broad re-exports of './tools' and './memory' to avoid circular dependencies.
+// Import directly from '@/mastra/tools' or '@/mastra/memory' instead.
+
+// Re-export feature flags
+export { FEATURES } from '@/config/feature-flags';
+
 export default mastra;

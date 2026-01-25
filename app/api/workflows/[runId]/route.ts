@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 import { getWorkflowStatus } from '@/mastra/tools/memgraph/workflow-status';
 import { getAuditLogger } from '@/lib/audit-logger';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 
 interface RouteParams {
   params: Promise<{ runId: string }>;

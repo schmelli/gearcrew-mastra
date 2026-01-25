@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 import { getMemgraphClient } from '@/lib/memgraph-client';
-import { getLibSQLClient } from '@/mastra/index';
+import { getLibSQLClient } from '@/lib/db';
 import { getAuditLogger } from '@/lib/audit-logger';
 import { getAnalystAgent } from '@/mastra/agents/analyst';
 import { getLatestRuns } from '@/mastra/tools/memgraph/workflow-status';

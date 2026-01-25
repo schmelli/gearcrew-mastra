@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { getEnricherAgent, EnrichmentRequest, EnrichmentResult } from '../agents/enricher';
 import { getAuditLogger } from '@/lib/audit-logger';
-import { getLibSQLClient } from '../index';
+import { getLibSQLClient } from '@/lib/db';
 import { getMemgraphClient } from '@/lib/memgraph-client';
 import { preloadProductTypes } from '@/mastra/services/product-types';
 import { cleanupExpiredCache as cleanupFirecrawlCache } from '@/mastra/tools/firecrawl/cache';
