@@ -41,6 +41,9 @@ const TriggerRequestSchema = z.object({
   brand: z.string().nullable().optional(),
   name: z.string().min(1),
   productUrl: z.string().url().nullable().optional(),
+  locale: z.string().optional(),
+  currency: z.string().length(3).optional(),
+  country: z.string().length(2).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -63,7 +66,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { gearItemId, brand, name, productUrl } = parsed.data;
+  const { gearItemId, brand, name, productUrl, locale, currency, country } = parsed.data;
 
   // Start workflow asynchronously — do not await
   let pendingRunId: string | null = null;
@@ -73,6 +76,9 @@ export async function POST(request: NextRequest) {
     brand: brand ?? null,
     name,
     productUrl: productUrl ?? null,
+    locale,
+    currency,
+    country,
   });
 
   // Brief wait to let workflow record its runId in DB

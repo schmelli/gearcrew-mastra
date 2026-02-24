@@ -27,6 +27,12 @@ export interface PriceDiscoveryParams {
   brand: string | null;
   name: string;
   productUrl: string | null;
+  /** BCP-47 locale code, e.g. 'de' or 'en'. Drives search language and query phrasing. */
+  locale?: string;
+  /** ISO 4217 preferred currency, e.g. 'EUR'. Used as extraction hint when no symbol is present. */
+  currency?: string;
+  /** ISO 3166-1 alpha-2 country code, e.g. 'DE'. Biases search results toward local shops. */
+  country?: string;
 }
 
 export interface DiscoveredPrice {
@@ -56,15 +62,17 @@ export interface PriceDiscoveryResult {
 
 /**
  * Extract price from scraped markdown content using common patterns.
+ * @param preferredCurrency ISO 4217 hint — used as fallback when no currency symbol is found.
  */
-function extractPriceFromMarkdown(markdown: string): DiscoveredPrice | null {
+function extractPriceFromMarkdown(markdown: string, preferredCurrency = 'USD'): DiscoveredPrice | null {
   type PricePattern = { regex: RegExp; currency: string };
   const patterns: PricePattern[] = [
-    { regex: /\$\s*(\d{1,5}(?:[.,]\d{2})?)/, currency: 'USD' },
     { regex: /€\s*(\d{1,5}(?:[.,]\d{2})?)/, currency: 'EUR' },
+    { regex: /(\d{1,5}(?:[.,]\d{2})?)\s*€/, currency: 'EUR' },
     { regex: /£\s*(\d{1,5}(?:[.,]\d{2})?)/, currency: 'GBP' },
-    { regex: /(?:Price|MSRP|RRP|UVP)[\s:$€£]*(\d{1,5}(?:[.,]\d{2})?)/i, currency: 'USD' },
-    { regex: /(\d{1,5}(?:[.,]\d{2})?)\s*(?:USD|EUR|GBP|CHF)/i, currency: 'USD' },
+    { regex: /\$\s*(\d{1,5}(?:[.,]\d{2})?)/, currency: 'USD' },
+    { regex: /(?:Price|MSRP|RRP|UVP|Preis)[\s:$€£]*(\d{1,5}(?:[.,]\d{2})?)/i, currency: preferredCurrency },
+    { regex: /(\d{1,5}(?:[.,]\d{2})?)\s*(?:EUR|USD|GBP|CHF)/i, currency: preferredCurrency },
   ];
 
   for (const { regex, currency } of patterns) {
@@ -73,9 +81,11 @@ function extractPriceFromMarkdown(markdown: string): DiscoveredPrice | null {
       const raw = match[1].replace(',', '.');
       const value = parseFloat(raw);
       if (value > 1 && value < 100_000) {
+        // Re-detect currency from surrounding symbols for accuracy
         const detectedCurrency =
           markdown.includes('€') ? 'EUR' :
           markdown.includes('£') ? 'GBP' :
+          markdown.includes('CHF') ? 'CHF' :
           currency;
         return { value, currency: detectedCurrency };
       }
@@ -88,12 +98,12 @@ function extractPriceFromMarkdown(markdown: string): DiscoveredPrice | null {
 // Step 1: Scrape Manufacturer Price
 // ============================================================================
 
-async function scrapeManufacturerPrice(productUrl: string): Promise<DiscoveredPrice | null> {
+async function scrapeManufacturerPrice(productUrl: string, preferredCurrency?: string): Promise<DiscoveredPrice | null> {
   try {
     const client = new FirecrawlClient();
     const result = await client.scrape(productUrl, { onlyMainContent: true });
     if (!result.success || !result.data.markdown) return null;
-    return extractPriceFromMarkdown(result.data.markdown);
+    return extractPriceFromMarkdown(result.data.markdown, preferredCurrency);
   } catch (error) {
     console.warn('[PriceDiscovery] Manufacturer scrape failed:', error);
     return null;
@@ -106,10 +116,15 @@ async function scrapeManufacturerPrice(productUrl: string): Promise<DiscoveredPr
 
 async function searchResellerPrices(
   brand: string | null,
-  name: string
+  name: string,
+  locale = 'en',
+  preferredCurrency = 'USD'
 ): Promise<DiscoveredReseller[]> {
   try {
-    const query = `buy ${brand ? brand + ' ' : ''}${name} outdoor gear shop`;
+    const brandPrefix = brand ? `${brand} ` : '';
+    const query = locale === 'de'
+      ? `${brandPrefix}${name} kaufen outdoor shop`
+      : `buy ${brandPrefix}${name} outdoor gear shop`;
     const client = new FirecrawlClient();
     const searchResult = await client.search(query, {
       limit: 5,
@@ -123,7 +138,7 @@ async function searchResellerPrices(
     for (const result of searchResult.results.slice(0, 3)) {
       if (!result.url || !result.markdown) continue;
 
-      const price = extractPriceFromMarkdown(result.markdown);
+      const price = extractPriceFromMarkdown(result.markdown, preferredCurrency);
       if (!price) continue;
 
       let storeName = result.title ?? '';
@@ -335,10 +350,10 @@ export async function executePriceDiscoveryWorkflow(
     console.info('[PriceDiscovery] Workflow started', { runId, gearItemId: params.gearItemId, name: params.name });
 
     const manufacturerPrice = params.productUrl
-      ? await scrapeManufacturerPrice(params.productUrl)
+      ? await scrapeManufacturerPrice(params.productUrl, params.currency)
       : null;
 
-    const resellers = await searchResellerPrices(params.brand, params.name);
+    const resellers = await searchResellerPrices(params.brand, params.name, params.locale, params.currency);
 
     await writeToMemGraph(params.gearItemId, params.brand, params.name, manufacturerPrice, params.productUrl, resellers);
 
