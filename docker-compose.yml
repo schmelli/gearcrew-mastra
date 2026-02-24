@@ -19,9 +19,10 @@ services:
 
   gardener:
     build: .
+    env_file: .env
     container_name: graph-gardener
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - MEMGRAPH_HOST=memgraph
       - MEMGRAPH_PORT=7687

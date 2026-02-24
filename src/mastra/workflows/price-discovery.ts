@@ -43,6 +43,8 @@ export interface DiscoveredPrice {
 export interface DiscoveredReseller {
   name: string;
   url: string;
+  /** Real retailer website URL derived from Serper `source` field (not the Google Shopping redirect) */
+  websiteUrl?: string;
   price: number;
   currency: string;
 }
@@ -122,6 +124,86 @@ interface SerperShoppingItem {
 }
 
 /**
+ * Map a Serper Shopping `source` string to a real retailer website URL.
+ *
+ * Serper's `item.link` is always a Google Shopping redirect URL
+ * (https://www.google.com/search?ibp=oshop&...).  The `item.source` field
+ * contains the human-readable retailer name, e.g. "eBay DE", "Outdoorxl.de".
+ * We use that to derive the actual shop domain.
+ *
+ * Lookup order:
+ *  1. Known-name map (handles localised eBay, Amazon variants, etc.)
+ *  2. If the source itself looks like a domain (contains "."), normalise it
+ *  3. Fallback: null (caller will skip or use a placeholder)
+ */
+function sourceToWebsiteUrl(source: string, country = 'DE'): string | null {
+  if (!source) return null;
+
+  const s = source.trim();
+  const sLower = s.toLowerCase();
+
+  // Known retailer name → canonical URL map
+  const KNOWN: Record<string, string> = {
+    // eBay – regional variants
+    'ebay de': 'https://www.ebay.de',
+    'ebay at': 'https://www.ebay.at',
+    'ebay ch': 'https://www.ebay.ch',
+    'ebay uk': 'https://www.ebay.co.uk',
+    'ebay us': 'https://www.ebay.com',
+    'ebay.de': 'https://www.ebay.de',
+    'ebay.at': 'https://www.ebay.at',
+    'ebay': country === 'DE' ? 'https://www.ebay.de' : 'https://www.ebay.com',
+    // Amazon – regional variants
+    'amazon de': 'https://www.amazon.de',
+    'amazon.de': 'https://www.amazon.de',
+    'amazon at': 'https://www.amazon.at',
+    'amazon.at': 'https://www.amazon.at',
+    'amazon ch': 'https://www.amazon.ch',  // redirect to .de usually
+    'amazon uk': 'https://www.amazon.co.uk',
+    'amazon us': 'https://www.amazon.com',
+    'amazon': country === 'DE' ? 'https://www.amazon.de' : 'https://www.amazon.com',
+    // Common German/European outdoor retailers
+    'bergfreunde.de': 'https://www.bergfreunde.de',
+    'bergfreunde': 'https://www.bergfreunde.de',
+    'campz': 'https://www.campz.de',
+    'campz.de': 'https://www.campz.de',
+    'globetrotter': 'https://www.globetrotter.de',
+    'globetrotter.de': 'https://www.globetrotter.de',
+    'outdoorxl.de': 'https://www.outdoorxl.de',
+    'outdoorxl': 'https://www.outdoorxl.de',
+    'sport conrad': 'https://www.sport-conrad.com',
+    'sport-conrad': 'https://www.sport-conrad.com',
+    'sport-conrad.com': 'https://www.sport-conrad.com',
+    'bergzeit': 'https://www.bergzeit.de',
+    'bergzeit.de': 'https://www.bergzeit.de',
+    'trekking-lite-store.com': 'https://www.trekking-lite-store.com',
+    'trekking lite store': 'https://www.trekking-lite-store.com',
+    'avocadostore': 'https://www.avocadostore.de',
+    'avocadostore.de': 'https://www.avocadostore.de',
+    'outnorth': 'https://www.outnorth.de',
+    'idealo': 'https://www.idealo.de',
+    'idealo.de': 'https://www.idealo.de',
+  };
+
+  if (KNOWN[sLower]) return KNOWN[sLower];
+
+  // If source contains a dot it probably IS a domain already (e.g. "Outdoorxl.de")
+  if (s.includes('.') && !s.includes(' ')) {
+    // Ensure it has a protocol
+    const withProto = sLower.startsWith('http') ? s : `https://www.${s.toLowerCase()}`;
+    try { new URL(withProto); return withProto; } catch { /* fall through */ }
+  }
+
+  // Source looks like a store name with a dot somewhere (e.g. "Berg & Outdoor.de")
+  const dotMatch = s.match(/\b([\w-]+\.(?:de|at|ch|com|co\.uk|fr|nl|eu))\b/i);
+  if (dotMatch) {
+    return `https://www.${dotMatch[1].toLowerCase()}`;
+  }
+
+  return null;
+}
+
+/**
  * Parse Serper Shopping price strings like "€ 549,00", "$549.00", "£ 429.00".
  */
 function parseSerperPrice(priceStr: string): DiscoveredPrice | null {
@@ -180,12 +262,17 @@ async function searchResellerPricesSerper(
       const price = parseSerperPrice(item.price);
       if (!price) continue;
 
+      // item.link is a Google Shopping redirect URL — extract hostname only as display fallback
       let domain: string;
       try { domain = new URL(item.link).hostname.replace(/^www\./, ''); } catch { domain = item.link; }
+
+      // Derive real retailer URL from the human-readable `source` field
+      const websiteUrl = item.source ? sourceToWebsiteUrl(item.source, country.toUpperCase()) : null;
 
       resellers.push({
         name: item.source ?? domain,
         url: item.link,
+        websiteUrl: websiteUrl ?? undefined,
         price: price.value,
         currency: price.currency,
       });
@@ -348,13 +435,26 @@ async function writeBackToSupabase(
 
   for (const reseller of resellers) {
     try {
-      let domain: string;
-      try {
-        domain = new URL(reseller.url).hostname;
-      } catch {
-        domain = reseller.url;
+      // Prefer the source-derived real retailer URL; fall back to URL hostname only when unavailable.
+      // Never use Google Shopping redirect URLs (item.link starts with google.com).
+      let websiteUrl: string;
+      if (reseller.websiteUrl) {
+        websiteUrl = reseller.websiteUrl;
+      } else {
+        let domain: string;
+        try {
+          const parsed = new URL(reseller.url);
+          // Skip Google Shopping redirects entirely — they have no usable retailer domain
+          if (parsed.hostname === 'www.google.com' || parsed.hostname === 'google.com') {
+            console.warn('[PriceDiscovery] Skipping Google Shopping redirect URL for reseller:', reseller.name);
+            continue;
+          }
+          domain = parsed.hostname;
+        } catch {
+          domain = reseller.url;
+        }
+        websiteUrl = `https://${domain}`;
       }
-      const websiteUrl = `https://${domain}`;
 
       // First: look up existing reseller by website_url
       let resellerId: string | null = null;
