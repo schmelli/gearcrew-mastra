@@ -231,6 +231,7 @@ export const SCHEDULES = {
   MORNING_HYGIENE: '0 4 * * *', // Daily at 04:00 UTC
   DEEP_DEDUPLICATION: '0 2 * * 0', // Sundays at 02:00 UTC
   AUDIT_PURGE: '0 3 1 * *', // Monthly on 1st at 03:00 UTC
+  PRICE_DISCOVERY_REFRESH: '5 4 * * *', // Daily at 04:05 UTC
 } as const;
 
 // Singleton instance
