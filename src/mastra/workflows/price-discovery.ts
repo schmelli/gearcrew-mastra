@@ -253,23 +253,42 @@ async function writeBackToSupabase(
       } catch {
         domain = reseller.url;
       }
+      const websiteUrl = `https://${domain}`;
 
-      const upsertRes = await fetch(
-        `${supabaseUrl}/rest/v1/resellers`,
-        {
-          method: 'POST',
-          headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=representation' },
-          body: JSON.stringify({ name: reseller.name, website_url: `https://${domain}`, is_active: true }),
-        }
+      // First: look up existing reseller by website_url
+      let resellerId: string | null = null;
+      const lookupRes = await fetch(
+        `${supabaseUrl}/rest/v1/resellers?website_url=eq.${encodeURIComponent(websiteUrl)}&select=id&limit=1`,
+        { headers }
       );
-
-      if (!upsertRes.ok) {
-        console.warn('[PriceDiscovery] Reseller upsert failed:', upsertRes.status);
-        continue;
+      if (lookupRes.ok) {
+        const existing = await lookupRes.json() as Array<{ id: string }>;
+        resellerId = existing[0]?.id ?? null;
       }
 
-      const upserted = await upsertRes.json() as Array<{ id: string }> | { id: string };
-      const resellerId = Array.isArray(upserted) ? upserted[0]?.id : (upserted as { id: string })?.id;
+      // If not found: create with all required fields
+      if (!resellerId) {
+        const createRes = await fetch(
+          `${supabaseUrl}/rest/v1/resellers`,
+          {
+            method: 'POST',
+            headers: { ...headers, Prefer: 'return=representation' },
+            body: JSON.stringify({
+              name: reseller.name,
+              website_url: websiteUrl,
+              reseller_type: 'online',
+              is_active: true,
+            }),
+          }
+        );
+        if (!createRes.ok) {
+          console.warn('[PriceDiscovery] Reseller create failed:', createRes.status);
+          continue;
+        }
+        const created = await createRes.json() as Array<{ id: string }>;
+        resellerId = created[0]?.id ?? null;
+      }
+
       if (!resellerId) continue;
 
       await fetch(
