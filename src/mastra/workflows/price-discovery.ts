@@ -114,12 +114,106 @@ async function scrapeManufacturerPrice(productUrl: string, preferredCurrency?: s
 // Step 2: Search Reseller Prices
 // ============================================================================
 
+interface SerperShoppingItem {
+  title: string;
+  link: string;
+  source?: string;
+  price?: string;
+}
+
+/**
+ * Parse Serper Shopping price strings like "€ 549,00", "$549.00", "£ 429.00".
+ */
+function parseSerperPrice(priceStr: string): DiscoveredPrice | null {
+  const currencySymbols: [string, string][] = [
+    ['CHF', 'CHF'],
+    ['€', 'EUR'],
+    ['£', 'GBP'],
+    ['$', 'USD'],
+  ];
+
+  for (const [symbol, currency] of currencySymbols) {
+    if (!priceStr.includes(symbol)) continue;
+    const numStr = priceStr.replace(symbol, '').trim();
+    // Handle European format "549,00" vs US format "549.00"
+    const normalized = /\d,\d{2}$/.test(numStr)
+      ? numStr.replace(/\./g, '').replace(',', '.')
+      : numStr.replace(/[^0-9.]/g, '');
+    const value = parseFloat(normalized);
+    if (value > 1 && value < 100_000) return { value, currency };
+  }
+  return null;
+}
+
+/**
+ * Geo-targeted reseller search via Serper Shopping API.
+ * Returns structured prices directly from Google Shopping — no page scraping needed.
+ */
+async function searchResellerPricesSerper(
+  brand: string | null,
+  name: string,
+  country = 'de',
+  locale = 'de',
+): Promise<DiscoveredReseller[]> {
+  const serperApiKey = process.env.SERPER_API_KEY;
+  if (!serperApiKey) return [];
+
+  try {
+    const query = `${brand ? brand + ' ' : ''}${name}`;
+    const res = await fetch('https://google.serper.dev/shopping', {
+      method: 'POST',
+      headers: { 'X-API-KEY': serperApiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: query, gl: country.toLowerCase(), hl: locale, num: 5 }),
+    });
+
+    if (!res.ok) {
+      console.warn('[PriceDiscovery] Serper Shopping returned', res.status);
+      return [];
+    }
+
+    const data = await res.json() as { shopping?: SerperShoppingItem[] };
+    if (!data.shopping || data.shopping.length === 0) return [];
+
+    const resellers: DiscoveredReseller[] = [];
+    for (const item of data.shopping.slice(0, 3)) {
+      if (!item.link || !item.price) continue;
+      const price = parseSerperPrice(item.price);
+      if (!price) continue;
+
+      let domain: string;
+      try { domain = new URL(item.link).hostname.replace(/^www\./, ''); } catch { domain = item.link; }
+
+      resellers.push({
+        name: item.source ?? domain,
+        url: item.link,
+        price: price.value,
+        currency: price.currency,
+      });
+    }
+
+    return resellers;
+  } catch (error) {
+    console.warn('[PriceDiscovery] Serper Shopping search failed:', error);
+    return [];
+  }
+}
+
+/**
+ * Search reseller prices: Serper Shopping (geo-targeted) with Firecrawl fallback.
+ */
 async function searchResellerPrices(
   brand: string | null,
   name: string,
   locale = 'en',
-  preferredCurrency = 'USD'
+  preferredCurrency = 'USD',
+  country = 'us',
 ): Promise<DiscoveredReseller[]> {
+  // Primary: Serper Shopping — structured prices, geo-targeted, no scraping
+  const serperResults = await searchResellerPricesSerper(brand, name, country, locale);
+  if (serperResults.length > 0) return serperResults;
+
+  // Fallback: Firecrawl web search + markdown price extraction
+  console.info('[PriceDiscovery] Serper returned no results, falling back to Firecrawl');
   try {
     const brandPrefix = brand ? `${brand} ` : '';
     const query = locale === 'de'
@@ -134,28 +228,20 @@ async function searchResellerPrices(
     if (!searchResult.success || searchResult.results.length === 0) return [];
 
     const resellers: DiscoveredReseller[] = [];
-
     for (const result of searchResult.results.slice(0, 3)) {
       if (!result.url || !result.markdown) continue;
-
       const price = extractPriceFromMarkdown(result.markdown, preferredCurrency);
       if (!price) continue;
 
       let storeName = result.title ?? '';
       if (!storeName) {
-        try {
-          storeName = new URL(result.url).hostname.replace(/^www\./, '');
-        } catch {
-          storeName = result.url;
-        }
+        try { storeName = new URL(result.url).hostname.replace(/^www\./, ''); } catch { storeName = result.url; }
       }
-
       resellers.push({ name: storeName, url: result.url, price: price.value, currency: price.currency });
     }
-
     return resellers;
   } catch (error) {
-    console.warn('[PriceDiscovery] Reseller search failed:', error);
+    console.warn('[PriceDiscovery] Firecrawl fallback search failed:', error);
     return [];
   }
 }
@@ -353,7 +439,7 @@ export async function executePriceDiscoveryWorkflow(
       ? await scrapeManufacturerPrice(params.productUrl, params.currency)
       : null;
 
-    const resellers = await searchResellerPrices(params.brand, params.name, params.locale, params.currency);
+    const resellers = await searchResellerPrices(params.brand, params.name, params.locale, params.currency, params.country);
 
     await writeToMemGraph(params.gearItemId, params.brand, params.name, manufacturerPrice, params.productUrl, resellers);
 
