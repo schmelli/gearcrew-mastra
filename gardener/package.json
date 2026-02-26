@@ -1,0 +1,34 @@
+{
+  "name": "geargraph-gardener",
+  "version": "2.0.0",
+  "description": "GearGraph Gardener — single Mastra agent for graph maintenance and enrichment",
+  "type": "module",
+  "scripts": {
+    "dev": "mastra dev",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:evals": "vitest run src/evals"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.7",
+    "@ai-sdk/google": "^3.0.13",
+    "@mastra/core": "^0.24.9",
+    "@mastra/deployer-vercel": "^0.2.0",
+    "neo4j-driver": "^5.17.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
