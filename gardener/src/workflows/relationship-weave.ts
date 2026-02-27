@@ -1,20 +1,6 @@
 import { Workflow, Step } from "@mastra/core/workflows";
 import { z } from "zod";
-
-/** Strip markdown fences and extract the outermost JSON object from text. */
-function extractJson(text: string): unknown | null {
-  // Strip markdown code fences if present
-  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-  const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
-  // Find the outermost JSON object
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch {
-    return null;
-  }
-}
+import { extractJson } from "../lib/utils.js";
 
 const candidateSchema = z.object({
   sourceGearId: z.string(),
@@ -301,12 +287,17 @@ const validateAndWriteRelationships = new Step({
         `Write these validated relationships to the GearGraph:
       ${candidateList}
 
+      Each line above is formatted as: (sourceGearId)-[:RELATIONSHIP_TYPE]->(targetGearId) [confidence]
+      The RELATIONSHIP_TYPE in each line (e.g. ALTERNATIVE_TO, PAIRS_WITH, COMPARE_TO) is the exact
+      Cypher relationship type to use for that specific relationship.
+
       For each relationship:
-      1. Use getOntology to verify the relationship type is valid
+      1. Use getOntology to verify the relationship type from that line is valid in the ontology
       2. Use validateSchema to check compliance
-      3. Use graphWrite with MERGE:
+      3. Use graphWrite with MERGE, substituting the actual relationship type from that line.
+         For example, for a PAIRS_WITH relationship:
          MATCH (g1:GearItem {gearId: $sourceId}), (g2:GearItem {gearId: $targetId})
-         MERGE (g1)-[:RELATIONSHIP_TYPE {createdAt: datetime(), source: 'gardener-relationship-weave'}]->(g2)
+         MERGE (g1)-[:PAIRS_WITH {createdAt: datetime(), source: 'gardener-relationship-weave'}]->(g2)
       4. Verify with graphQuery
 
       End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,

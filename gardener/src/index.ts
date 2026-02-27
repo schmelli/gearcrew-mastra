@@ -18,7 +18,7 @@ export const mastra = new Mastra({
   },
   server: {
     port,
-    timeout: 600000, // 10 min for local dev
+    timeout: process.env.NODE_ENV === "production" ? 120000 : 600000, // 2 min in prod, 10 min in dev
   },
 });
 

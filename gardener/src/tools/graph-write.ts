@@ -28,14 +28,35 @@ After writing, always verify with a graphQuery read-back.`,
   }),
   execute: async ({ context: { query, params, reason } }) => {
     const upper = query.toUpperCase();
-    if (
-      upper.includes("DELETE") ||
-      upper.includes("DETACH DELETE") ||
-      upper.includes("DROP") ||
-      upper.includes("REMOVE")
-    ) {
+
+    // Block destructive operations
+    const destructivePatterns = [
+      /\bDELETE\b/,
+      /\bDETACH\s+DELETE\b/,
+      /\bDROP\b/,
+      /\bREMOVE\b/,
+      /\bFOREACH\b/,
+      /\bCALL\s+\{/,  // Subquery calls that could bypass restrictions
+    ];
+    for (const pattern of destructivePatterns) {
+      if (pattern.test(upper)) {
+        throw new Error(
+          "Destructive operations (DELETE/DETACH DELETE/DROP/REMOVE/FOREACH/CALL subquery) are not allowed. Use data-quality-audit workflow for corrections.",
+        );
+      }
+    }
+
+    // Enforce that write queries must contain MERGE (non-destructive upsert pattern)
+    if (!upper.includes("MERGE")) {
       throw new Error(
-        "Destructive operations (DELETE/DROP/REMOVE) are not allowed. Use data-quality-audit workflow for corrections.",
+        "Write queries must use MERGE to prevent duplicates. CREATE is not permitted.",
+      );
+    }
+
+    // Limit query length to prevent excessively complex injected queries
+    if (query.length > 4000) {
+      throw new Error(
+        "Query exceeds maximum allowed length (4000 characters). Break large writes into smaller batches.",
       );
     }
 

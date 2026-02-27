@@ -1,20 +1,6 @@
 import { Workflow, Step } from "@mastra/core/workflows";
 import { z } from "zod";
-
-/** Strip markdown fences and extract the outermost JSON object from text. */
-function extractJson(text: string): unknown | null {
-  // Strip markdown code fences if present
-  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-  const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
-  // Find the outermost JSON object
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch {
-    return null;
-  }
-}
+import { extractJson } from "../lib/utils.js";
 
 const issueSchema = z.object({
   type: z.string(),
