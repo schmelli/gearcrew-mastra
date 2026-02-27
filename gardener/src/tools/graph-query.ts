@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { getSession } from "../lib/memgraph";
+import { getReadSession } from "../lib/memgraph.js";
 
 export const graphQuery = createTool({
   id: "graphQuery",
@@ -23,21 +23,7 @@ Common queries:
     summary: z.string(),
   }),
   execute: async ({ context: { query, params } }) => {
-    const upper = query.toUpperCase();
-    const hasWriteKeyword =
-      upper.includes("CREATE") ||
-      upper.includes("DELETE") ||
-      upper.includes("SET") ||
-      upper.includes("REMOVE") ||
-      upper.includes("MERGE");
-
-    if (hasWriteKeyword) {
-      throw new Error(
-        "graphQuery is read-only. Use graphWrite for mutations.",
-      );
-    }
-
-    const session = getSession();
+    const session = getReadSession();
     try {
       const result = await session.run(query, params || {});
       const records = result.records.map((r) => r.toObject());

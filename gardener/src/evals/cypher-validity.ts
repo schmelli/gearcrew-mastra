@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { getSession } from "../lib/memgraph";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { getReadSession, verifyConnection, closeDriver } from "../lib/memgraph.js";
 
 /**
  * Cypher Validity Eval
@@ -8,6 +8,18 @@ import { getSession } from "../lib/memgraph";
  * by running EXPLAIN on them before execution.
  * Target: 100% validity (syntax errors = hard failures)
  */
+
+beforeAll(async () => {
+  const ok = await verifyConnection();
+  if (!ok) {
+    console.warn("Memgraph is not reachable — skipping Cypher Validity tests");
+    return "skip";
+  }
+});
+
+afterAll(async () => {
+  await closeDriver();
+});
 
 const SAMPLE_QUERIES = [
   // Brand assessment queries
@@ -70,7 +82,7 @@ describe("Cypher Validity", () => {
   it.each(SAMPLE_QUERIES)(
     "should generate valid Cypher: $name",
     async ({ query, params }) => {
-      const session = getSession();
+      const session = getReadSession();
       try {
         // EXPLAIN validates syntax without executing
         const explainQuery = `EXPLAIN ${query}`;

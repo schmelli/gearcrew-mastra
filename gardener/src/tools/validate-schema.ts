@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { ONTOLOGY } from "../lib/ontology";
+import { ONTOLOGY } from "../lib/ontology.js";
 
 export const validateSchema = createTool({
   id: "validateSchema",
@@ -9,7 +9,6 @@ This is a deterministic check — no LLM involved. It verifies:
 - Node labels are valid
 - Relationship types are valid
 - Required properties are present
-- Property types match expected types
 ALWAYS call this before graphWrite.`,
   inputSchema: z.object({
     nodeLabel: z
@@ -59,7 +58,7 @@ ALWAYS call this before graphWrite.`,
     // Check relationship types
     if (relationships) {
       for (const rel of relationships) {
-        const validRel = ONTOLOGY.relationships.find(
+        const validRel = ONTOLOGY.relationships.some(
           (r) =>
             r.type === rel.type &&
             r.startLabel === nodeLabel &&
@@ -75,12 +74,12 @@ ALWAYS call this before graphWrite.`,
 
     // Warnings for data quality
     if (nodeLabel === "GearItem") {
-      if (!properties.weight_grams && !properties.weightGrams) {
+      if (properties.weight_grams == null && properties.weightGrams == null) {
         warnings.push(
           "No weight specified — GearItems should have weight_grams",
         );
       }
-      if (!properties.price_usd && !properties.price_eur) {
+      if (properties.price_usd == null && properties.price_eur == null) {
         warnings.push(
           "No price specified — GearItems should have price_usd or price_eur",
         );

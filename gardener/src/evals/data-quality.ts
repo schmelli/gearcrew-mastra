@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { brandCompleteness, gearItemCompleteness } from "../lib/completeness";
+import { brandCompleteness, gearItemCompleteness } from "../lib/completeness.js";
 
 /**
  * Data Quality Eval
@@ -17,7 +17,7 @@ describe("Data Quality — Completeness Scoring", () => {
         familyCount: 0,
         technologyCount: 0,
       });
-      expect(score).toBe(0.05);
+      expect(score).toBeCloseTo(0.05);
     });
 
     it("should return higher score with more fields filled", () => {
@@ -79,7 +79,7 @@ describe("Data Quality — Completeness Scoring", () => {
       expect(with5).toBe(with50);
     });
 
-    it("should reach >0.8 for a fully enriched brand", () => {
+    it("should reach >0.95 for a fully enriched brand", () => {
       const score = brandCompleteness(
         {
           name: "Full Brand",
@@ -93,10 +93,12 @@ describe("Data Quality — Completeness Scoring", () => {
           productCount: 20,
           familyCount: 8,
           technologyCount: 3,
+          hasSegment: true,
+          hasCompetitors: true,
         },
       );
 
-      expect(score).toBeGreaterThan(0.8);
+      expect(score).toBeGreaterThan(0.95);
     });
   });
 
@@ -124,6 +126,45 @@ describe("Data Quality — Completeness Scoring", () => {
         imageUrl: "https://msr.com/images/hubba.jpg",
       });
       expect(score).toBeGreaterThan(0.8);
+    });
+
+    it("should count weight_grams = 0 as present", () => {
+      const withZeroWeight = gearItemCompleteness({
+        name: "Test",
+        brand: "B",
+        weight_grams: 0,
+      });
+      const withoutWeight = gearItemCompleteness({
+        name: "Test",
+        brand: "B",
+      });
+      expect(withZeroWeight).toBeGreaterThan(withoutWeight);
+    });
+
+    it("should count price_usd = 0 as present", () => {
+      const withZeroPrice = gearItemCompleteness({
+        name: "Test",
+        brand: "B",
+        price_usd: 0,
+      });
+      const withoutPrice = gearItemCompleteness({
+        name: "Test",
+        brand: "B",
+      });
+      expect(withZeroPrice).toBeGreaterThan(withoutPrice);
+    });
+
+    it("should NOT count empty features array as present", () => {
+      const withEmptyFeatures = gearItemCompleteness({
+        name: "Test",
+        brand: "B",
+        features: [],
+      });
+      const withoutFeatures = gearItemCompleteness({
+        name: "Test",
+        brand: "B",
+      });
+      expect(withEmptyFeatures).toBe(withoutFeatures);
     });
   });
 });

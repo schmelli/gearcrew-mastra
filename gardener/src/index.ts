@@ -1,9 +1,12 @@
 import { Mastra } from "@mastra/core/mastra";
-import { gardener } from "./agents/gardener";
-import { brandEnrichment } from "./workflows/brand-enrichment";
-import { productDiscovery } from "./workflows/product-discovery";
-import { dataQualityAudit } from "./workflows/data-quality-audit";
-import { relationshipWeave } from "./workflows/relationship-weave";
+import { gardener } from "./agents/gardener.js";
+import { brandEnrichment } from "./workflows/brand-enrichment.js";
+import { productDiscovery } from "./workflows/product-discovery.js";
+import { dataQualityAudit } from "./workflows/data-quality-audit.js";
+import { relationshipWeave } from "./workflows/relationship-weave.js";
+import { closeDriver } from "./lib/memgraph.js";
+
+const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
   agents: { gardener },
@@ -14,7 +17,13 @@ export const mastra = new Mastra({
     relationshipWeave,
   },
   server: {
-    port: 4111,
+    port,
     timeout: 600000, // 10 min for local dev
   },
+});
+
+process.on("SIGTERM", async () => {
+  console.log("[Gardener] SIGTERM received, closing connections...");
+  await closeDriver();
+  process.exit(0);
 });

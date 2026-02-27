@@ -1,6 +1,21 @@
 import { Workflow, Step } from "@mastra/core/workflows";
 import { z } from "zod";
 
+/** Strip markdown fences and extract the outermost JSON object from text. */
+function extractJson(text: string): unknown | null {
+  // Strip markdown code fences if present
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
+  // Find the outermost JSON object
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
+}
+
 const assessBrand = new Step({
   id: "assess-brand",
   description: "Check what data already exists for this brand in the graph",
@@ -18,10 +33,27 @@ const assessBrand = new Step({
   }),
   execute: async ({ context, mastra }) => {
     const brandName = context.triggerData.brandName;
-    const agent = mastra!.getAgent("Gardener");
 
-    const result = await agent.generate(
-      `Query the GearGraph for brand "${brandName}".
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
+
+    const fallback = {
+      brand: brandName,
+      exists: false,
+      productCount: 0,
+      familyCount: 0,
+      technologyCount: 0,
+      hasDescription: false,
+      hasWebsite: false,
+      hasCountry: false,
+      completenessScore: 0,
+      gaps: ["brand not found in graph"],
+    };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Query the GearGraph for brand "${brandName}".
       Get: the brand node properties, count of products (GearItem),
       count of product families, count of technologies,
       and whether it has a description, website URL, and country.
@@ -49,30 +81,19 @@ const assessBrand = new Step({
         completenessScore: number (0.0-1.0),
         gaps: string[]
       }`,
-      { toolChoice: "required" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-      }
-    } catch {
-      // Fall through to default
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[assess-brand] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return {
-      brand: brandName,
-      exists: false,
-      productCount: 0,
-      familyCount: 0,
-      technologyCount: 0,
-      hasDescription: false,
-      hasWebsite: false,
-      hasCountry: false,
-      completenessScore: 0,
-      gaps: ["brand not found in graph"],
-    };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return parsed as typeof fallback;
+    }
+
+    return fallback;
   },
 });
 
@@ -99,10 +120,13 @@ const researchGaps = new Step({
       };
     }
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-    const research = await agent.generate(
-      `The brand "${assessment.brand}" has these gaps: ${assessment.gaps.join(", ")}
+    let research;
+    try {
+      research = await agent.generate(
+        `The brand "${assessment.brand}" has these gaps: ${assessment.gaps.join(", ")}
       Completeness: ${(assessment.completenessScore * 100).toFixed(0)}%
 
       Research the missing information. Priority:
@@ -112,8 +136,12 @@ const researchGaps = new Step({
 
       For each piece of information you find, note the source URL.
       Return structured data for each gap you can fill as JSON.`,
-      { toolChoice: "auto" },
-    );
+        { toolChoice: "auto" },
+      );
+    } catch (err) {
+      console.error("[research-gaps] agent.generate() failed:", err);
+      return { action: "enrich" as const, data: "Research failed due to agent error" };
+    }
 
     return { action: "enrich" as const, data: research.text };
   },
@@ -138,10 +166,13 @@ const validateAndWrite = new Step({
       return { written: 0, skipped: true };
     }
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-    const result = await agent.generate(
-      `You have researched data for brand enrichment:
+    let result;
+    try {
+      result = await agent.generate(
+        `You have researched data for brand enrichment:
       ${research.data}
 
       Now:
@@ -156,12 +187,17 @@ const validateAndWrite = new Step({
       - Include sourceUrl and updatedAt on all new properties
       - Set updatedAt to current datetime: datetime()
       - Parameterize all queries (use $params)
-      - Report how many successful writes you made`,
-      { toolChoice: "auto" },
-    );
 
-    const countMatch = result.text.match(/(\d+)\s*(?:successful|writes|nodes|properties)/i);
-    const writeCount = countMatch ? parseInt(countMatch[1], 10) : 0;
+      End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
+        { toolChoice: "auto" },
+      );
+    } catch (err) {
+      console.error("[validate-and-write] agent.generate() failed:", err);
+      return { written: 0, skipped: false, details: "Agent error during write" };
+    }
+
+    const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
+    const writeCount = parsed?.writesSucceeded ?? 0;
 
     return { written: writeCount, skipped: false, details: result.text };
   },
@@ -195,10 +231,13 @@ const verifyImprovement = new Step({
       };
     }
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-    const after = await agent.generate(
-      `Re-assess the completeness of brand "${brandName}" in the GearGraph.
+    let after;
+    try {
+      after = await agent.generate(
+        `Re-assess the completeness of brand "${brandName}" in the GearGraph.
       Previous score was ${(before * 100).toFixed(0)}%.
       Query the graph and calculate the new completeness score.
 
@@ -209,18 +248,22 @@ const verifyImprovement = new Step({
       4. Technology count
 
       Return ONLY a JSON object: { "completenessScore": <number 0.0-1.0> }`,
-      { toolChoice: "required" },
-    );
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[verify-improvement] agent.generate() failed:", err);
+      return {
+        brand: brandName,
+        scoreBefore: before,
+        scoreAfter: before,
+        improved: false,
+      };
+    }
 
     let scoreAfter = before;
-    try {
-      const jsonMatch = after.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        scoreAfter = parsed.completenessScore ?? before;
-      }
-    } catch {
-      // Keep before score
+    const parsed = extractJson(after.text) as { completenessScore?: number } | null;
+    if (parsed?.completenessScore != null) {
+      scoreAfter = parsed.completenessScore;
     }
 
     return {

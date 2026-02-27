@@ -29,39 +29,47 @@ Rate limits apply — don't scrape more than 10 pages per minute.`,
       throw new Error("FIRECRAWL_API_KEY environment variable is required");
     }
 
-    const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        url,
-        formats: extractSchema
-          ? [
-              {
-                type: "json",
-                prompt: `Extract outdoor gear data: ${JSON.stringify(extractSchema)}`,
-                schema: extractSchema,
-              },
-            ]
-          : [format],
-        onlyMainContent: true,
-        waitFor: 5000,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Firecrawl API error: ${response.status} ${response.statusText}`,
-      );
+    const bodyPayload: Record<string, unknown> = {
+      url,
+      formats: [format === "json" ? "extract" : "markdown"],
+      onlyMainContent: true,
+    };
+    if (extractSchema) {
+      bodyPayload.formats = ["extract"];
+      bodyPayload.extract = {
+        prompt: `Extract outdoor gear data matching this schema`,
+        schema: extractSchema,
+      };
     }
 
-    const result = await response.json();
-    return {
-      data: result.data,
-      sourceUrl: url,
-      scrapedAt: new Date().toISOString(),
-    };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(bodyPayload),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Firecrawl API error: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const result = await response.json();
+      return {
+        data: result.data,
+        sourceUrl: url,
+        scrapedAt: new Date().toISOString(),
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   },
 });

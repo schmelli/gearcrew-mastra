@@ -1,6 +1,24 @@
 import { Workflow, Step } from "@mastra/core/workflows";
 import { z } from "zod";
 
+/** Strip markdown fences and extract the outermost JSON object from text. */
+function extractJson(text: string): unknown | null {
+  // Strip markdown code fences if present
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
+  // Find the outermost JSON object
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
+}
+
+/** Maximum number of new products to process in a single workflow run. */
+const MAX_NEW_PRODUCTS = 25;
+
 const getExistingProducts = new Step({
   id: "get-existing-products",
   description: "Get all existing products for a brand from the graph",
@@ -17,10 +35,20 @@ const getExistingProducts = new Step({
   }),
   execute: async ({ context, mastra }) => {
     const brandName = context.triggerData.brandName;
-    const agent = mastra!.getAgent("Gardener");
 
-    const result = await agent.generate(
-      `Query the GearGraph for all products from brand "${brandName}".
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
+
+    const fallback = {
+      brand: brandName,
+      existingProducts: [] as Array<{ name: string; gearId?: string }>,
+      productCount: 0,
+    };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Query the GearGraph for all products from brand "${brandName}".
 
       Run these graphQuery queries:
       1. MATCH (g:GearItem {brand: $name}) RETURN g.name AS name, g.gearId AS gearId
@@ -35,21 +63,19 @@ const getExistingProducts = new Step({
         "productCount": <number>,
         "website": "<url or null>"
       }`,
-      { toolChoice: "required" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fall through
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[get-existing-products] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return {
-      brand: brandName,
-      existingProducts: [],
-      productCount: 0,
-    };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return parsed as typeof fallback;
+    }
+
+    return fallback;
   },
 });
 
@@ -73,14 +99,19 @@ const scrapeProductCatalog = new Step({
       existingProducts: Array<{ name: string }>;
     }>("get-existing-products");
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
     const existingNames = existing.existingProducts
       .map((p) => p.name)
       .join(", ");
 
-    const result = await agent.generate(
-      `Discover new products for brand "${existing.brand}".
+    const fallback = { discoveredProducts: [] as Array<{ name: string; url?: string; category?: string }>, source: "unknown" };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Discover new products for brand "${existing.brand}".
 
       Existing products already in the graph: ${existingNames || "none"}
       ${existing.website ? `Brand website: ${existing.website}` : "No website on file."}
@@ -95,17 +126,19 @@ const scrapeProductCatalog = new Step({
         "discoveredProducts": [{ "name": "...", "url": "...", "category": "..." }, ...],
         "source": "<primary source URL>"
       }`,
-      { toolChoice: "auto" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fall through
+        { toolChoice: "auto" },
+      );
+    } catch (err) {
+      console.error("[scrape-product-catalog] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return { discoveredProducts: [], source: "unknown" };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return parsed as typeof fallback;
+    }
+
+    return fallback;
   },
 });
 
@@ -121,6 +154,7 @@ const diffProducts = new Step({
       }),
     ),
     alreadyExists: z.number(),
+    capped: z.boolean(),
   }),
   execute: async ({ context }) => {
     const existing = context.getStepResult<{
@@ -139,14 +173,25 @@ const diffProducts = new Step({
       existing.existingProducts.map((p) => p.name.toLowerCase()),
     );
 
-    const newProducts = discovered.discoveredProducts.filter(
+    const allNew = discovered.discoveredProducts.filter(
       (p) => !existingNamesLower.has(p.name.toLowerCase()),
     );
+
+    // Cap at MAX_NEW_PRODUCTS to prevent runaway operations
+    const capped = allNew.length > MAX_NEW_PRODUCTS;
+    const newProducts = allNew.slice(0, MAX_NEW_PRODUCTS);
+
+    if (capped) {
+      console.warn(
+        `[diff-products] Capped new products from ${allNew.length} to ${MAX_NEW_PRODUCTS}`,
+      );
+    }
 
     return {
       newProducts,
       alreadyExists:
-        discovered.discoveredProducts.length - newProducts.length,
+        discovered.discoveredProducts.length - allNew.length,
+      capped,
     };
   },
 });
@@ -178,7 +223,8 @@ const researchAndWriteNew = new Step({
       };
     }
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
     // Process in batches of 5 to avoid overwhelming the agent
     const batchSize = 5;
@@ -195,8 +241,9 @@ const researchAndWriteNew = new Step({
         )
         .join("\n");
 
-      const result = await agent.generate(
-        `Add these new products for brand "${brand}" to the GearGraph:
+      try {
+        const result = await agent.generate(
+          `Add these new products for brand "${brand}" to the GearGraph:
         ${productList}
 
         For each product:
@@ -213,15 +260,20 @@ const researchAndWriteNew = new Step({
            MERGE (g)-[:PRODUCED_BY]->(b)
         8. Verify with graphQuery
 
-        Report how many products you successfully added vs skipped.`,
-        { toolChoice: "auto" },
-      );
+        End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
+          { toolChoice: "auto" },
+        );
 
-      const addedMatch = result.text.match(/(\d+)\s*(?:added|created|successfully)/i);
-      const skippedMatch = result.text.match(/(\d+)\s*(?:skipped|failed)/i);
-      totalAdded += addedMatch ? parseInt(addedMatch[1], 10) : 0;
-      totalSkipped += skippedMatch ? parseInt(skippedMatch[1], 10) : 0;
-      allDetails.push(result.text);
+        const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
+        totalAdded += parsed?.writesSucceeded ?? 0;
+        totalSkipped += parsed?.writesFailed ?? 0;
+        allDetails.push(result.text);
+      } catch (err) {
+        console.error(`[research-and-write-new] Batch ${i / batchSize + 1} failed:`, err);
+        totalSkipped += batch.length;
+        allDetails.push(`Batch ${i / batchSize + 1} failed: ${err}`);
+        // Continue to next batch instead of killing all subsequent batches
+      }
     }
 
     return {
@@ -247,25 +299,33 @@ const verifyProductCount = new Step({
       productCount: number;
     }>("get-existing-products").productCount;
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-    const result = await agent.generate(
-      `Count the total products for brand "${brandName}" in the GearGraph now.
+    let result;
+    try {
+      result = await agent.generate(
+        `Count the total products for brand "${brandName}" in the GearGraph now.
       Query: MATCH (g:GearItem {brand: $name}) RETURN count(g) AS count
       Params: { name: "${brandName}" }
 
       Return ONLY: { "count": <number> }`,
-      { toolChoice: "required" },
-    );
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[verify-product-count] agent.generate() failed:", err);
+      return {
+        brand: brandName,
+        productsBefore: before,
+        productsAfter: before,
+        newlyAdded: 0,
+      };
+    }
 
     let after = before;
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        after = JSON.parse(jsonMatch[0]).count ?? before;
-      }
-    } catch {
-      // Keep before count
+    const parsed = extractJson(result.text) as { count?: number } | null;
+    if (parsed?.count != null) {
+      after = parsed.count;
     }
 
     return {

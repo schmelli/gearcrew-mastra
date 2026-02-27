@@ -1,6 +1,6 @@
-export { graphQuery } from "./graph-query";
-export { graphWrite } from "./graph-write";
-export { webScrape } from "./web-scrape";
-export { webSearch } from "./web-search";
-export { validateSchema } from "./validate-schema";
-export { getOntology } from "./get-ontology";
+export { graphQuery } from "./graph-query.js";
+export { graphWrite } from "./graph-write.js";
+export { webScrape } from "./web-scrape.js";
+export { webSearch } from "./web-search.js";
+export { validateSchema } from "./validate-schema.js";
+export { getOntology } from "./get-ontology.js";

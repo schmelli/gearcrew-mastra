@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { getSession } from "../lib/memgraph";
+import { getWriteSession } from "../lib/memgraph.js";
 
 export const graphWrite = createTool({
   id: "graphWrite",
@@ -22,7 +22,7 @@ After writing, always verify with a graphQuery read-back.`,
   outputSchema: z.object({
     success: z.boolean(),
     nodesCreated: z.number(),
-    nodesModified: z.number(),
+    propertiesSet: z.number(),
     relationshipsCreated: z.number(),
     summary: z.string(),
   }),
@@ -31,14 +31,15 @@ After writing, always verify with a graphQuery read-back.`,
     if (
       upper.includes("DELETE") ||
       upper.includes("DETACH DELETE") ||
-      upper.includes("DROP")
+      upper.includes("DROP") ||
+      upper.includes("REMOVE")
     ) {
       throw new Error(
-        "Destructive operations (DELETE/DROP) are not allowed. Use data-quality-audit workflow for corrections.",
+        "Destructive operations (DELETE/DROP/REMOVE) are not allowed. Use data-quality-audit workflow for corrections.",
       );
     }
 
-    const session = getSession();
+    const session = getWriteSession();
     try {
       const result = await session.run(query, params || {});
       const counters = result.summary.counters.updates();
@@ -50,7 +51,7 @@ After writing, always verify with a graphQuery read-back.`,
       return {
         success: true,
         nodesCreated: counters.nodesCreated,
-        nodesModified: counters.propertiesSet,
+        propertiesSet: counters.propertiesSet,
         relationshipsCreated: counters.relationshipsCreated,
         summary: `Created ${counters.nodesCreated} nodes, ${counters.relationshipsCreated} relationships, set ${counters.propertiesSet} properties`,
       };

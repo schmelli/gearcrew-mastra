@@ -7,7 +7,7 @@ import {
   webSearch,
   validateSchema,
   getOntology,
-} from "../tools";
+} from "../tools/index.js";
 
 export const gardener = new Agent({
   name: "Gardener",

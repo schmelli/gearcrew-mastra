@@ -26,35 +26,43 @@ Keep queries specific: "MSR Hubba Hubba NX 2 2025 specs weight" not "MSR tents".
       throw new Error("TAVILY_API_KEY environment variable is required");
     }
 
-    const response = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        max_results: maxResults,
-        search_depth: searchDepth,
-        include_domains: [
-          "rei.com",
-          "backpackinglight.com",
-          "sectionhiker.com",
-          "outdoorgearlab.com",
-          "switchbacktravel.com",
-          "cleverhiker.com",
-          "globetrotter.de",
-          "bergfreunde.de",
-          "bergzeit.de",
-        ],
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
-    if (!response.ok) {
-      throw new Error(
-        `Tavily API error: ${response.status} ${response.statusText}`,
-      );
+    try {
+      const response = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: apiKey,
+          query,
+          max_results: maxResults,
+          search_depth: searchDepth,
+          include_domains: [
+            "rei.com",
+            "backpackinglight.com",
+            "sectionhiker.com",
+            "outdoorgearlab.com",
+            "switchbacktravel.com",
+            "cleverhiker.com",
+            "globetrotter.de",
+            "bergfreunde.de",
+            "bergzeit.de",
+          ],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Tavily API error: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const result = await response.json();
+      return { results: result.results || [] };
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const result = await response.json();
-    return { results: result.results || [] };
   },
 });

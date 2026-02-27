@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { ONTOLOGY } from "../lib/ontology";
+import { ONTOLOGY } from "../lib/ontology.js";
 
 export const getOntology = createTool({
   id: "getOntology",

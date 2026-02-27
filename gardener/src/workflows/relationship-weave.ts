@@ -1,6 +1,21 @@
 import { Workflow, Step } from "@mastra/core/workflows";
 import { z } from "zod";
 
+/** Strip markdown fences and extract the outermost JSON object from text. */
+function extractJson(text: string): unknown | null {
+  // Strip markdown code fences if present
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
+  // Find the outermost JSON object
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
+}
+
 const candidateSchema = z.object({
   sourceGearId: z.string(),
   sourceName: z.string(),
@@ -17,25 +32,36 @@ const findCompetitors = new Step({
     "Find GearItems in same category + price range without COMPETES_WITH edges",
   outputSchema: z.object({
     candidates: z.array(candidateSchema),
+    skipped: z.boolean(),
   }),
   execute: async ({ context, mastra }) => {
-    const agent = mastra!.getAgent("Gardener");
+    const types = context.triggerData.types as string[];
+    if (!types.includes("competitors")) {
+      return { candidates: [], skipped: true };
+    }
 
-    const result = await agent.generate(
-      `Find potential COMPARE_TO / ALTERNATIVE_TO relationships between GearItems.
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-      Run this graphQuery:
-      MATCH (g1:GearItem), (g2:GearItem)
-      WHERE g1.category = g2.category
-        AND g1.brand <> g2.brand
-        AND id(g1) < id(g2)
+    const fallback = { candidates: [] as Array<z.infer<typeof candidateSchema>>, skipped: false };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Find potential COMPARE_TO / ALTERNATIVE_TO relationships between GearItems.
+
+      Run this graphQuery (index-friendly, category-based approach):
+      MATCH (g1:GearItem)
+      WHERE g1.category IS NOT NULL AND g1.price_usd IS NOT NULL
+      WITH g1.category AS cat, collect(g1) AS items
+      WHERE size(items) > 1
+      UNWIND items AS g1
+      UNWIND items AS g2
+      WHERE g1.brand <> g2.brand AND id(g1) < id(g2)
+        AND abs(g1.price_usd - g2.price_usd) / g1.price_usd < 0.3
         AND NOT (g1)-[:COMPARE_TO]-(g2)
         AND NOT (g1)-[:ALTERNATIVE_TO]-(g2)
-        AND g1.price_usd IS NOT NULL AND g2.price_usd IS NOT NULL
-        AND abs(g1.price_usd - g2.price_usd) / g1.price_usd < 0.3
-      RETURN g1.gearId AS g1Id, g1.name AS g1Name, g1.brand AS g1Brand,
-             g2.gearId AS g2Id, g2.name AS g2Name, g2.brand AS g2Brand,
-             g1.category AS category, g1.price_usd AS p1, g2.price_usd AS p2
+      RETURN g1.gearId AS g1Id, g1.name AS g1Name, g2.gearId AS g2Id, g2.name AS g2Name, g1.category AS category
       LIMIT 20
 
       For each pair, determine if they are truly alternatives/competitors.
@@ -56,17 +82,19 @@ const findCompetitors = new Step({
           ...
         ]
       }`,
-      { toolChoice: "required" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fall through
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[find-competitors] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return { candidates: [] };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return { ...(parsed as { candidates: Array<z.infer<typeof candidateSchema>> }), skipped: false };
+    }
+
+    return fallback;
   },
 });
 
@@ -76,12 +104,23 @@ const findPairings = new Step({
     "Find GearItems commonly used together without PAIRS_WITH edges",
   outputSchema: z.object({
     candidates: z.array(candidateSchema),
+    skipped: z.boolean(),
   }),
   execute: async ({ context, mastra }) => {
-    const agent = mastra!.getAgent("Gardener");
+    const types = context.triggerData.types as string[];
+    if (!types.includes("pairings")) {
+      return { candidates: [], skipped: true };
+    }
 
-    const result = await agent.generate(
-      `Find potential PAIRS_WITH relationships between GearItems.
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
+
+    const fallback = { candidates: [] as Array<z.infer<typeof candidateSchema>>, skipped: false };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Find potential PAIRS_WITH relationships between GearItems.
 
       Common pairings in outdoor gear:
       - Tent + Sleeping bag
@@ -119,17 +158,19 @@ const findPairings = new Step({
           ...
         ]
       }`,
-      { toolChoice: "required" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fall through
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[find-pairings] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return { candidates: [] };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return { ...(parsed as { candidates: Array<z.infer<typeof candidateSchema>> }), skipped: false };
+    }
+
+    return fallback;
   },
 });
 
@@ -139,12 +180,23 @@ const findFamilyAlternatives = new Step({
     "Find ProductFamilies without ALTERNATIVE_TO connections",
   outputSchema: z.object({
     candidates: z.array(candidateSchema),
+    skipped: z.boolean(),
   }),
   execute: async ({ context, mastra }) => {
-    const agent = mastra!.getAgent("Gardener");
+    const types = context.triggerData.types as string[];
+    if (!types.includes("alternatives")) {
+      return { candidates: [], skipped: true };
+    }
 
-    const result = await agent.generate(
-      `Find potential ALTERNATIVE_TO relationships between GearItems
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
+
+    const fallback = { candidates: [] as Array<z.infer<typeof candidateSchema>>, skipped: false };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Find potential ALTERNATIVE_TO relationships between GearItems
       from different ProductFamilies in the same product type.
 
       Run graphQuery:
@@ -165,17 +217,19 @@ const findFamilyAlternatives = new Step({
       {
         "candidates": [...]
       }`,
-      { toolChoice: "required" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fall through
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[find-family-alternatives] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return { candidates: [] };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return { ...(parsed as { candidates: Array<z.infer<typeof candidateSchema>> }), skipped: false };
+    }
+
+    return fallback;
   },
 });
 
@@ -231,7 +285,8 @@ const validateAndWriteRelationships = new Step({
       };
     }
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
     const candidateList = allCandidates
       .map(
@@ -240,8 +295,10 @@ const validateAndWriteRelationships = new Step({
       )
       .join("\n");
 
-    const result = await agent.generate(
-      `Write these validated relationships to the GearGraph:
+    let result;
+    try {
+      result = await agent.generate(
+        `Write these validated relationships to the GearGraph:
       ${candidateList}
 
       For each relationship:
@@ -252,15 +309,24 @@ const validateAndWriteRelationships = new Step({
          MERGE (g1)-[:RELATIONSHIP_TYPE {createdAt: datetime(), source: 'gardener-relationship-weave'}]->(g2)
       4. Verify with graphQuery
 
-      Report total relationships written.`,
-      { toolChoice: "auto" },
-    );
+      End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
+        { toolChoice: "auto" },
+      );
+    } catch (err) {
+      console.error("[validate-and-write-relationships] agent.generate() failed:", err);
+      return {
+        written: 0,
+        skipped: allCandidates.length,
+        details: "Agent error during relationship writes",
+      };
+    }
 
-    const writtenMatch = result.text.match(/(\d+)\s*(?:written|created|merged)/i);
+    const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
+    const writeCount = parsed?.writesSucceeded ?? 0;
 
     return {
-      written: writtenMatch ? parseInt(writtenMatch[1], 10) : 0,
-      skipped: allCandidates.length - (writtenMatch ? parseInt(writtenMatch[1], 10) : 0),
+      written: writeCount,
+      skipped: allCandidates.length - writeCount,
       details: result.text,
     };
   },

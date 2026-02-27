@@ -2,9 +2,6 @@ import neo4j, { type Driver, type Session } from "neo4j-driver";
 
 let driver: Driver | null = null;
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
-
 function getDriver(): Driver {
   if (!driver) {
     const uri = process.env.MEMGRAPH_URI;
@@ -13,6 +10,12 @@ function getDriver(): Driver {
 
     if (!uri) {
       throw new Error("MEMGRAPH_URI environment variable is required");
+    }
+
+    if ((user && !password) || (!user && password)) {
+      console.warn(
+        "[Memgraph] Only one of MEMGRAPH_USER/MEMGRAPH_PASSWORD is set — falling back to no auth",
+      );
     }
 
     driver = neo4j.driver(
@@ -29,12 +32,20 @@ function getDriver(): Driver {
   return driver;
 }
 
-export function getSession(): Session {
-  return getDriver().session({ database: "memgraph" });
+export function getReadSession(): Session {
+  return getDriver().session({
+    defaultAccessMode: neo4j.session.READ,
+  });
+}
+
+export function getWriteSession(): Session {
+  return getDriver().session({
+    defaultAccessMode: neo4j.session.WRITE,
+  });
 }
 
 export async function verifyConnection(): Promise<boolean> {
-  const session = getSession();
+  const session = getReadSession();
   try {
     await session.run("RETURN 1 AS ping");
     return true;
@@ -46,32 +57,12 @@ export async function verifyConnection(): Promise<boolean> {
   }
 }
 
-export async function executeWithRetry<T>(
-  fn: (session: Session) => Promise<T>,
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const session = getSession();
-    try {
-      return await fn(session);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn(
-        `[Memgraph] Attempt ${attempt}/${MAX_RETRIES} failed:`,
-        lastError.message,
-      );
-      if (attempt < MAX_RETRIES) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, RETRY_DELAY_MS * attempt),
-        );
-      }
-    } finally {
-      await session.close();
-    }
-  }
-
-  throw lastError;
+/** Safely convert a Neo4j Integer or JS number to a plain number. */
+export function toNumber(value: unknown): number {
+  if (value == null) return 0;
+  if (typeof value === "number") return value;
+  if (neo4j.isInt(value)) return value.toNumber();
+  return Number(value) || 0;
 }
 
 export async function closeDriver(): Promise<void> {

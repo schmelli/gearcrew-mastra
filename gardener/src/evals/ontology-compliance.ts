@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ONTOLOGY } from "../lib/ontology";
+import { ONTOLOGY } from "../lib/ontology.js";
 
 /**
  * Ontology Compliance Eval
@@ -10,21 +10,35 @@ import { ONTOLOGY } from "../lib/ontology";
  */
 
 function extractLabels(cypher: string): string[] {
-  const labelPattern = /\((?:\w+)?:(\w+)/g;
+  // Match the primary label after (var: or (:
+  const primaryPattern = /\((?:\w+)?:(\w+)/g;
   const labels: string[] = [];
   let match;
-  while ((match = labelPattern.exec(cypher)) !== null) {
+  while ((match = primaryPattern.exec(cypher)) !== null) {
     labels.push(match[1]);
+
+    // Check for additional labels on the same node, e.g. (n:Label1:Label2)
+    const afterPrimary = cypher.slice(match.index + match[0].length);
+    const multiLabelPattern = /^:(\w+)/g;
+    let extraMatch;
+    while ((extraMatch = multiLabelPattern.exec(afterPrimary)) !== null) {
+      labels.push(extraMatch[1]);
+    }
   }
   return labels;
 }
 
 function extractRelationshipTypes(cypher: string): string[] {
-  const relPattern = /\[:(\w+)/g;
+  // Match relationship types including pipe-delimited like [:TYPE1|TYPE2]
+  const relPattern = /\[:(\w+(?:\|\w+)*)/g;
   const types: string[] = [];
   let match;
   while ((match = relPattern.exec(cypher)) !== null) {
-    types.push(match[1]);
+    const raw = match[1];
+    // Split on pipe to handle [:TYPE1|TYPE2]
+    for (const t of raw.split("|")) {
+      types.push(t);
+    }
   }
   return types;
 }
@@ -58,6 +72,20 @@ describe("Ontology Compliance", () => {
         }
       },
     );
+
+    it("should detect invalid node labels", () => {
+      const badQuery =
+        "MATCH (x:FakeLabel)-[:PRODUCED_BY]->(b:OutdoorBrand) RETURN x";
+      const labels = extractLabels(badQuery);
+      const invalidLabels = labels.filter(
+        (l) => !ONTOLOGY.nodeLabels.includes(l),
+      );
+      expect(
+        invalidLabels.length,
+        "Expected to find at least one invalid label",
+      ).toBeGreaterThan(0);
+      expect(invalidLabels).toContain("FakeLabel");
+    });
   });
 
   describe("Relationship Types", () => {

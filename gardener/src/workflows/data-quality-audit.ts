@@ -1,6 +1,21 @@
 import { Workflow, Step } from "@mastra/core/workflows";
 import { z } from "zod";
 
+/** Strip markdown fences and extract the outermost JSON object from text. */
+function extractJson(text: string): unknown | null {
+  // Strip markdown code fences if present
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
+  // Find the outermost JSON object
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
+}
+
 const issueSchema = z.object({
   type: z.string(),
   severity: z.enum(["critical", "high", "medium", "low"]),
@@ -18,10 +33,15 @@ const runQualityQueries = new Step({
     totalIssues: z.number(),
   }),
   execute: async ({ context, mastra }) => {
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-    const result = await agent.generate(
-      `Run a comprehensive data quality audit on the GearGraph. Execute these graphQuery queries:
+    const fallback = { issues: [] as Array<z.infer<typeof issueSchema>>, totalIssues: 0 };
+
+    let result;
+    try {
+      result = await agent.generate(
+        `Run a comprehensive data quality audit on the GearGraph. Execute these graphQuery queries:
 
       1. GearItems without weight_grams:
          MATCH (g:GearItem) WHERE g.weight_grams IS NULL RETURN count(g) AS count
@@ -73,17 +93,19 @@ const runQualityQueries = new Step({
         ],
         "totalIssues": <number>
       }`,
-      { toolChoice: "required" },
-    );
-
-    try {
-      const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fall through
+        { toolChoice: "required" },
+      );
+    } catch (err) {
+      console.error("[run-quality-queries] agent.generate() failed:", err);
+      return fallback;
     }
 
-    return { issues: [], totalIssues: 0 };
+    const parsed = extractJson(result.text);
+    if (parsed && typeof parsed === "object") {
+      return parsed as typeof fallback;
+    }
+
+    return fallback;
   },
 });
 
@@ -158,10 +180,12 @@ const fixIssues = new Step({
       return { fixed: 0, attempted: 0, details: "No fixable issues found" };
     }
 
-    const agent = mastra!.getAgent("Gardener");
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
-    // Only fix the top 10 most critical issues per run
-    const topIssues = scored.fixableIssues.slice(0, 10);
+    // Use maxFixes from trigger data instead of hardcoded 10
+    const maxFixes = context.triggerData.maxFixes ?? 50;
+    const topIssues = scored.fixableIssues.slice(0, maxFixes);
     const issueList = topIssues
       .map(
         (i, idx) =>
@@ -169,8 +193,10 @@ const fixIssues = new Step({
       )
       .join("\n");
 
-    const result = await agent.generate(
-      `Fix these data quality issues in the GearGraph:
+    let result;
+    try {
+      result = await agent.generate(
+        `Fix these data quality issues in the GearGraph:
       ${issueList}
 
       For each issue:
@@ -186,14 +212,19 @@ const fixIssues = new Step({
       - For duplicates, do NOT fix them in this step — just report them
       - Limit fixes to 20 nodes per issue to avoid runaway operations
 
-      Report total fixes made.`,
-      { toolChoice: "auto" },
-    );
+      End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
+        { toolChoice: "auto" },
+      );
+    } catch (err) {
+      console.error("[fix-issues] agent.generate() failed:", err);
+      return { fixed: 0, attempted: topIssues.length, details: "Agent error during fix" };
+    }
 
-    const fixedMatch = result.text.match(/(\d+)\s*(?:fixed|corrected|updated)/i);
+    const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
+    const fixCount = parsed?.writesSucceeded ?? 0;
 
     return {
-      fixed: fixedMatch ? parseInt(fixedMatch[1], 10) : 0,
+      fixed: fixCount,
       attempted: topIssues.length,
       details: result.text,
     };
@@ -212,10 +243,6 @@ const generateReport = new Step({
     report: z.string(),
   }),
   execute: async ({ context }) => {
-    const quality = context.getStepResult<{
-      totalIssues: number;
-    }>("run-quality-queries");
-
     const scored = context.getStepResult<{
       fixableIssues: Array<{ type: string; severity: string; description: string; affectedNodes: number }>;
       unfixableIssues: Array<{ type: string; severity: string; description: string; affectedNodes: number }>;
@@ -227,14 +254,18 @@ const generateReport = new Step({
       attempted: number;
     }>("fix-issues");
 
-    const remaining = quality.totalIssues - fixes.fixed;
+    // Compute totalIssues from array length instead of trusting LLM
+    const issuesFound = scored.fixableIssues.length + scored.unfixableIssues.length;
+
+    // Clamp remaining to prevent negative values
+    const remaining = Math.max(0, issuesFound - fixes.fixed);
 
     const reportLines = [
       `# GearGraph Data Quality Audit Report`,
       `Date: ${new Date().toISOString()}`,
       ``,
       `## Summary`,
-      `- Issues found: ${quality.totalIssues}`,
+      `- Issues found: ${issuesFound}`,
       `- Issues fixed: ${fixes.fixed}`,
       `- Issues remaining: ${remaining}`,
       `- Priority score: ${scored.priorityScore}`,
@@ -250,8 +281,8 @@ const generateReport = new Step({
     ];
 
     return {
-      summary: `Audit complete: ${quality.totalIssues} found, ${fixes.fixed} fixed, ${remaining} remaining`,
-      issuesFound: quality.totalIssues,
+      summary: `Audit complete: ${issuesFound} found, ${fixes.fixed} fixed, ${remaining} remaining`,
+      issuesFound,
       issuesFixed: fixes.fixed,
       issuesRemaining: remaining,
       priorityScore: scored.priorityScore,

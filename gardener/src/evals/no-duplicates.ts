@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { getSession } from "../lib/memgraph";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { getReadSession, verifyConnection, closeDriver, toNumber } from "../lib/memgraph.js";
 
 /**
  * No Duplicate Creation Eval
@@ -9,23 +9,34 @@ import { getSession } from "../lib/memgraph";
  * Target: 0 duplicates created
  */
 
+beforeAll(async () => {
+  const ok = await verifyConnection();
+  if (!ok) {
+    console.warn("Memgraph is not reachable — skipping No Duplicate Creation tests");
+    return "skip";
+  }
+});
+
+afterAll(async () => {
+  await closeDriver();
+});
+
 describe("No Duplicate Creation", () => {
   it("should have no duplicate GearItems (same name + brand)", async () => {
-    const session = getSession();
+    const session = getReadSession();
     try {
       const result = await session.run(`
-        MATCH (g1:GearItem), (g2:GearItem)
-        WHERE g1.brand = g2.brand
-          AND g1.name = g2.name
-          AND id(g1) < id(g2)
-        RETURN g1.brand AS brand, g1.name AS name, count(*) AS duplicates
+        MATCH (g:GearItem)
+        WITH g.brand AS brand, g.name AS name, count(*) AS cnt
+        WHERE cnt > 1
+        RETURN brand, name, cnt
         LIMIT 20
       `);
 
       const duplicates = result.records.map((r) => ({
         brand: r.get("brand"),
         name: r.get("name"),
-        count: r.get("duplicates").toNumber(),
+        count: toNumber(r.get("cnt")),
       }));
 
       if (duplicates.length > 0) {
@@ -45,19 +56,19 @@ describe("No Duplicate Creation", () => {
   });
 
   it("should have no duplicate OutdoorBrands (same name)", async () => {
-    const session = getSession();
+    const session = getReadSession();
     try {
       const result = await session.run(`
-        MATCH (b1:OutdoorBrand), (b2:OutdoorBrand)
-        WHERE b1.name = b2.name
-          AND id(b1) < id(b2)
-        RETURN b1.name AS name, count(*) AS duplicates
+        MATCH (b:OutdoorBrand)
+        WITH b.name AS name, count(*) AS cnt
+        WHERE cnt > 1
+        RETURN name, cnt
         LIMIT 20
       `);
 
       const duplicates = result.records.map((r) => ({
         name: r.get("name"),
-        count: r.get("duplicates").toNumber(),
+        count: toNumber(r.get("cnt")),
       }));
 
       if (duplicates.length > 0) {
@@ -77,7 +88,7 @@ describe("No Duplicate Creation", () => {
   });
 
   it("should have no duplicate GearItems by gearId", async () => {
-    const session = getSession();
+    const session = getReadSession();
     try {
       const result = await session.run(`
         MATCH (g:GearItem)
@@ -90,7 +101,7 @@ describe("No Duplicate Creation", () => {
 
       const duplicates = result.records.map((r) => ({
         gearId: r.get("gearId"),
-        count: r.get("cnt").toNumber(),
+        count: toNumber(r.get("cnt")),
       }));
 
       expect(

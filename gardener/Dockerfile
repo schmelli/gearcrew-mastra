@@ -1,22 +1,27 @@
-FROM node:20-slim AS base
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install dependencies
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci
 
-# Copy source
 COPY tsconfig.json ./
 COPY src/ ./src/
-
-# Build
 RUN npx tsc
 
-# Run
+FROM node:20-slim AS runner
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=builder /app/dist ./dist
+
 ENV NODE_ENV=production
 ENV DEPLOY_TARGET=cloudrun
 
+USER node
 EXPOSE 4111
 
 CMD ["node", "dist/index.js"]

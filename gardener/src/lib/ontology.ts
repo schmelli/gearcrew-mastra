@@ -174,16 +174,6 @@ export const ONTOLOGY = {
       startLabel: "ProductFamily",
       endLabel: "OutdoorBrand",
     },
-    {
-      type: "HAS_DATA_SOURCE",
-      startLabel: "ProductFamily",
-      endLabel: "DataSource",
-    },
-    {
-      type: "IS_VARIANT_OF",
-      startLabel: "OutdoorBrand",
-      endLabel: "ProductFamily",
-    },
   ],
 
   requiredProperties: {
