@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@mastra/core": "~0.24.9",
+    "mastra": "~0.18.9",
     "neo4j-driver": "^5.17.0",
     "zod": "^3.23.0"
   },
