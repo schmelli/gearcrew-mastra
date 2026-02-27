@@ -48,7 +48,7 @@ Keep queries specific: "MSR Hubba Hubba NX 2 2025 specs weight" not "MSR tents".
         );
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { organic?: Array<{ title?: string; link?: string; snippet?: string }> };
       const organic = data.organic || [];
 
       return {

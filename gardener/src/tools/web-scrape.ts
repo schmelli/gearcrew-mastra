@@ -62,7 +62,7 @@ Rate limits apply — don't scrape more than 10 pages per minute.`,
         );
       }
 
-      const result = await response.json();
+      const result = (await response.json()) as { data: unknown };
       return {
         data: result.data,
         sourceUrl: url,
