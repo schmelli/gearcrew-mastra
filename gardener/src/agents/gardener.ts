@@ -1,5 +1,4 @@
 import { Agent } from "@mastra/core/agent";
-import { openai } from "@ai-sdk/openai";
 import {
   graphQuery,
   graphWrite,
@@ -8,6 +7,14 @@ import {
   validateSchema,
   getOntology,
 } from "../tools/index.js";
+
+// Gemini 2.0 Flash via Vercel AI Gateway
+// Fast, cost-effective, excellent for tool calling
+const model = {
+  url: process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1",
+  id: "google/gemini-2.0-flash" as const,
+  apiKey: process.env.AI_GATEWAY_API_KEY ?? "",
+};
 
 export const gardener = new Agent({
   name: "Gardener",
@@ -47,7 +54,7 @@ DATA QUALITY STANDARDS:
 
 When you discover information, always ask: "Is this verifiable from the source?
 Would I stake my reputation as a gear expert on this?" If not, mark confidence as "low".`,
-  model: openai("gpt-4o"),
+  model,
   tools: {
     graphQuery,
     graphWrite,

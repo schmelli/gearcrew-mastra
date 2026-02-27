@@ -14,7 +14,7 @@ USER="geargraphadmin"
 REMOTE_PATH="/opt/memgraph/graph-gardener"
 COMPOSE_PATH="/opt/memgraph/memgraph-platform"
 CONTAINER_NAME="graph-gardener"
-BRANCH="001-graph-gardening"
+BRANCH="${1:-$(git branch --show-current)}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -22,7 +22,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Parse arguments
+# Parse arguments (skip first arg if it looks like a branch name)
 BUILD_ONLY=false
 NO_PUSH=false
 for arg in "$@"; do
@@ -89,4 +89,4 @@ eval "$SSH_CMD \"docker ps --filter name=$CONTAINER_NAME --format 'table {{.Name
 echo ""
 echo -e "${GREEN}=== Deployment complete! ===${NC}"
 echo "Container logs: docker logs -f $CONTAINER_NAME"
-echo "API endpoint: https://geargraph.gearshack.app/api/system/status"
+echo "Gardener API: https://geargraph.gearshack.app/gardener/api/agents/gardener"

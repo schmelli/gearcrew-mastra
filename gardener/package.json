@@ -14,13 +14,11 @@
     "test:integration": "vitest run --project integration"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.7",
     "@mastra/core": "~0.24.9",
     "neo4j-driver": "^5.17.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@ai-sdk/google": "^3.0.13",
     "@mastra/deployer-vercel": "^0.2.0",
     "@types/node": "^20.14.0",
     "eslint": "^8.57.0",

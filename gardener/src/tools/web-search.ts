@@ -3,13 +3,12 @@ import { z } from "zod";
 
 export const webSearch = createTool({
   id: "webSearch",
-  description: `Search the web for outdoor gear information using Tavily.
+  description: `Search the web for outdoor gear information using Serper (Google Search API).
 Best for: Finding product reviews, discovering new releases, verifying specs.
 Keep queries specific: "MSR Hubba Hubba NX 2 2025 specs weight" not "MSR tents".`,
   inputSchema: z.object({
     query: z.string().describe("Search query (specific, 3-8 words)"),
     maxResults: z.number().min(1).max(10).default(5),
-    searchDepth: z.enum(["basic", "advanced"]).default("basic"),
   }),
   outputSchema: z.object({
     results: z.array(
@@ -20,47 +19,47 @@ Keep queries specific: "MSR Hubba Hubba NX 2 2025 specs weight" not "MSR tents".
       }),
     ),
   }),
-  execute: async ({ context: { query, maxResults, searchDepth } }) => {
-    const apiKey = process.env.TAVILY_API_KEY;
+  execute: async ({ context: { query, maxResults } }) => {
+    const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) {
-      throw new Error("TAVILY_API_KEY environment variable is required");
+      throw new Error("SERPER_API_KEY environment variable is required");
     }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch("https://api.tavily.com/search", {
+      const response = await fetch("https://google.serper.dev/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": apiKey,
+        },
         body: JSON.stringify({
-          api_key: apiKey,
-          query,
-          max_results: maxResults,
-          search_depth: searchDepth,
-          include_domains: [
-            "rei.com",
-            "backpackinglight.com",
-            "sectionhiker.com",
-            "outdoorgearlab.com",
-            "switchbacktravel.com",
-            "cleverhiker.com",
-            "globetrotter.de",
-            "bergfreunde.de",
-            "bergzeit.de",
-          ],
+          q: query,
+          num: maxResults,
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         throw new Error(
-          `Tavily API error: ${response.status} ${response.statusText}`,
+          `Serper API error: ${response.status} ${response.statusText}`,
         );
       }
 
-      const result = await response.json();
-      return { results: result.results || [] };
+      const data = await response.json();
+      const organic = data.organic || [];
+
+      return {
+        results: organic.map(
+          (item: { title?: string; link?: string; snippet?: string }) => ({
+            title: item.title || "",
+            url: item.link || "",
+            content: item.snippet || "",
+          }),
+        ),
+      };
     } finally {
       clearTimeout(timeout);
     }
