@@ -19,7 +19,6 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@mastra/deployer-vercel": "^0.2.0",
     "@types/node": "^20.14.0",
     "eslint": "^8.57.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
