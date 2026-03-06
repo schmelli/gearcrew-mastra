@@ -119,6 +119,7 @@ const researchGaps = new Step({
       1. If brand has a website, scrape it first (use webScrape)
       2. Search for the brand + "outdoor gear" to find reviews and product lists (use webSearch)
       3. Focus on: product catalog, technologies, founding info, headquarters
+      4. For products missing images: use imageSearch to find product photos
 
       For each piece of information you find, note the source URL.
       Return structured data for each gap you can fill as JSON.`,
@@ -176,6 +177,7 @@ const validateAndWrite = new Step({
       Important:
       - Use MERGE, never CREATE
       - Include sourceUrl and updatedAt on all new properties
+      - If you found product images, SET g.imageUrl = $imageUrl on the relevant GearItem nodes
       - Set updatedAt to current datetime: datetime()
       - Parameterize all queries (use $params)
 

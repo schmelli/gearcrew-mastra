@@ -6,6 +6,7 @@ import {
   webSearch,
   validateSchema,
   getOntology,
+  imageSearch,
 } from "../tools/index.js";
 
 // Gemini 2.0 Flash via Vercel AI Gateway
@@ -62,5 +63,6 @@ Would I stake my reputation as a gear expert on this?" If not, mark confidence a
     webSearch,
     validateSchema,
     getOntology,
+    imageSearch,
   },
 });

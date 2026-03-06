@@ -250,7 +250,12 @@ const researchAndWriteNew = new Step({
         7. Also MERGE the PRODUCED_BY relationship:
            MATCH (g:GearItem {gearId: $gearId}), (b:OutdoorBrand {name: $brand})
            MERGE (g)-[:PRODUCED_BY]->(b)
-        8. Verify with graphQuery
+        8. Extract the product image URL:
+           - If webScrape returned an imageUrl from og:image metadata, use it
+           - If not, use imageSearch to find: "${brand} <product name> product photo"
+           - Pick the first result from the manufacturer's own domain if available
+           - Include in your MERGE SET clause: g.imageUrl = $imageUrl
+        9. Verify with graphQuery
 
         End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
           { toolChoice: "auto" },

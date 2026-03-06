@@ -76,6 +76,7 @@ export const GearSpecsSchema = z.object({
   features: z.array(z.string()).optional(),
   description: z.string().optional(),
   sourceUrl: z.string().optional(),
+  imageUrl: z.string().optional(),
   scrapedAt: z.string().optional(),
   confidence: z.number().min(0).max(1).optional(),
 
@@ -251,7 +252,7 @@ export class FirecrawlClient {
 
     for (const result of searchResult.results) {
       if (result.markdown) {
-        const specs = this.extractGearSpecs(result.markdown, result.url);
+        const specs = this.extractGearSpecs(result.markdown, result.url, result.metadata);
         if (specs) {
           extractedSpecs.push(specs);
         }
@@ -284,9 +285,42 @@ export class FirecrawlClient {
   }
 
   /**
+   * Extract image URL from metadata or HTML content
+   */
+  extractImageUrl(metadata?: Record<string, unknown>, html?: string): string | undefined {
+    // Priority 1: og:image from metadata
+    const ogImage = metadata?.ogImage ?? metadata?.['og:image'];
+    if (typeof ogImage === 'string' && ogImage.startsWith('http')) {
+      return ogImage;
+    }
+
+    // Priority 2: JSON-LD Product image from HTML
+    if (html) {
+      const jsonLdMatch = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
+      if (jsonLdMatch) {
+        try {
+          const jsonLd = JSON.parse(jsonLdMatch[1]);
+          const items = Array.isArray(jsonLd) ? jsonLd : [jsonLd];
+          for (const item of items) {
+            if (item['@type'] === 'Product' && typeof item.image === 'string' && item.image.startsWith('http')) {
+              return item.image;
+            }
+            if (item['@type'] === 'Product' && Array.isArray(item.image) && item.image.length > 0) {
+              const first = item.image[0];
+              if (typeof first === 'string' && first.startsWith('http')) return first;
+            }
+          }
+        } catch { /* invalid JSON-LD, skip */ }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * Extract gear specifications from text content
    */
-  extractGearSpecs(content: string, sourceUrl?: string): GearSpecs | null {
+  extractGearSpecs(content: string, sourceUrl?: string, metadata?: Record<string, unknown>): GearSpecs | null {
     const specs: GearSpecs = {
       sourceUrl,
       scrapedAt: new Date().toISOString(),
@@ -294,6 +328,13 @@ export class FirecrawlClient {
     };
 
     let fieldsFound = 0;
+
+    // Extract image URL from metadata
+    const imageUrl = this.extractImageUrl(metadata, content);
+    if (imageUrl) {
+      specs.imageUrl = imageUrl;
+      fieldsFound++;
+    }
 
     // Extract weight - handle markdown formatting and various patterns
     const weightPatterns = [
@@ -506,8 +547,8 @@ export class FirecrawlClient {
       fieldsFound++;
     }
 
-    // Calculate confidence based on fields found (now 14 possible fields)
-    specs.confidence = Math.min(fieldsFound / 14, 1);
+    // Calculate confidence based on fields found (now 15 possible fields)
+    specs.confidence = Math.min(fieldsFound / 15, 1);
 
     return fieldsFound > 0 ? specs : null;
   }
@@ -546,6 +587,7 @@ export class FirecrawlClient {
       if (specs.connectorType && !merged.connectorType) merged.connectorType = specs.connectorType;
       if (specs.constructionType && !merged.constructionType) merged.constructionType = specs.constructionType;
       if (specs.size && !merged.size) merged.size = specs.size;
+      if (specs.imageUrl && !merged.imageUrl) merged.imageUrl = specs.imageUrl;
 
       // Merge materials
       if (specs.materials) {
@@ -558,7 +600,7 @@ export class FirecrawlClient {
       }
     }
 
-    // Calculate overall confidence (14 possible fields now)
+    // Calculate overall confidence (15 possible fields now)
     let fieldsPopulated = 0;
     if (merged.weight) fieldsPopulated++;
     if (merged.price) fieldsPopulated++;
@@ -574,8 +616,9 @@ export class FirecrawlClient {
     if (merged.connectorType) fieldsPopulated++;
     if (merged.constructionType) fieldsPopulated++;
     if (merged.size) fieldsPopulated++;
+    if (merged.imageUrl) fieldsPopulated++;
 
-    merged.confidence = fieldsPopulated / 14;
+    merged.confidence = fieldsPopulated / 15;
 
     return merged;
   }
@@ -636,6 +679,7 @@ interface SearchResult {
     title?: string;
     markdown?: string;
     description?: string;
+    metadata?: Record<string, unknown>;
   }>;
 }
 

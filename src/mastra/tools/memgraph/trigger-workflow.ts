@@ -10,6 +10,7 @@ import { executeMorningHygieneWorkflow } from '../../workflows/morning-hygiene';
 import { executeDeduplicationWorkflow } from '../../workflows/deep-deduplication';
 import { executeEmbeddingWorkflow } from '../../workflows/embedding-generation';
 import { executeDataQualityWorkflow } from '../../workflows/data-quality';
+import { executeImageDiscoveryWorkflow } from '../../workflows/image-discovery';
 
 export const WorkflowScopeSchema = z.object({
   category: z.string().optional(),
@@ -63,7 +64,7 @@ export async function isWorkflowRunning(workflowName: string): Promise<{
  * Trigger a workflow manually
  */
 export async function triggerWorkflow(
-  workflowName: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling' | 'embedding-generation' | 'data-quality',
+  workflowName: 'morning-hygiene' | 'deep-deduplication' | 'gap-filling' | 'embedding-generation' | 'data-quality' | 'image-discovery',
   options?: {
     scope?: WorkflowScope;
     priority?: 'normal' | 'high';
@@ -175,6 +176,10 @@ async function executeWorkflowAsync(
         });
         break;
 
+      case 'image-discovery':
+        await executeImageDiscoveryWorkflow({ workflowRunId: runId });
+        break;
+
       default:
         throw new Error(`Unknown workflow: ${workflowName}`);
     }
@@ -230,6 +235,12 @@ export function getAvailableWorkflows(): Array<{
     {
       name: 'data-quality',
       description: 'Detects product families and cleans up generic items without proper brands',
+      schedule: 'On-demand',
+      supportsScope: false,
+    },
+    {
+      name: 'image-discovery',
+      description: 'Discovers product images for GearItems missing imageUrl via og:image and Google Images',
       schedule: 'On-demand',
       supportsScope: false,
     },

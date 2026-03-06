@@ -22,6 +22,7 @@ Rate limits apply — don't scrape more than 10 pages per minute.`,
     data: z.any(),
     sourceUrl: z.string(),
     scrapedAt: z.string(),
+    imageUrl: z.string().optional(),
   }),
   execute: async ({ context: { url, extractSchema, format } }) => {
     const apiKey = process.env.FIRECRAWL_API_KEY;
@@ -63,10 +64,14 @@ Rate limits apply — don't scrape more than 10 pages per minute.`,
       }
 
       const result = (await response.json()) as { data: unknown };
+      const resultData = result.data as Record<string, unknown> | undefined;
+      const metadata = resultData?.metadata as Record<string, unknown> | undefined;
+      const imageUrl = (metadata?.ogImage ?? metadata?.['og:image'] ?? undefined) as string | undefined;
       return {
         data: result.data,
         sourceUrl: url,
         scrapedAt: new Date().toISOString(),
+        imageUrl,
       };
     } finally {
       clearTimeout(timeout);

@@ -4,3 +4,4 @@ export { webScrape } from "./web-scrape.js";
 export { webSearch } from "./web-search.js";
 export { validateSchema } from "./validate-schema.js";
 export { getOntology } from "./get-ontology.js";
+export { imageSearch } from "./image-search.js";
