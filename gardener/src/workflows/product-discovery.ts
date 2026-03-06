@@ -258,7 +258,7 @@ const researchAndWriteNew = new Step({
         9. Verify with graphQuery
 
         End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
-          { toolChoice: "auto" },
+          { toolChoice: "auto", maxSteps: 50 },
         );
 
         const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;

@@ -19,6 +19,9 @@ const model = {
 
 export const gardener = new Agent({
   name: "Gardener",
+  defaultGenerateOptions: {
+    maxSteps: 20,
+  },
   instructions: `You are the Gardener of the GearGraph — a knowledge graph about outdoor
 gear, brands, and equipment wisdom for hikers, backpackers, and outdoor enthusiasts.
 

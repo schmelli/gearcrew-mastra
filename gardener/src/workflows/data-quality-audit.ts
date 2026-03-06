@@ -199,7 +199,7 @@ const fixIssues = new Step({
       - Limit fixes to 20 nodes per issue to avoid runaway operations
 
       End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
-        { toolChoice: "auto" },
+        { toolChoice: "auto", maxSteps: 50 },
       );
     } catch (err) {
       console.error("[fix-issues] agent.generate() failed:", err);

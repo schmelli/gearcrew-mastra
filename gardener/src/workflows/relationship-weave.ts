@@ -301,7 +301,7 @@ const validateAndWriteRelationships = new Step({
       4. Verify with graphQuery
 
       End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
-        { toolChoice: "auto" },
+        { toolChoice: "auto", maxSteps: 50 },
       );
     } catch (err) {
       console.error("[validate-and-write-relationships] agent.generate() failed:", err);
