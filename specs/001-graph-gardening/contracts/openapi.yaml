@@ -1,0 +1,747 @@
+openapi: 3.1.0
+info:
+  title: Graph Gardening Admin API
+  description: API for interacting with the Graph Gardening system
+  version: 1.0.0
+  contact:
+    name: GearGraph Team
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /api/chat:
+    post:
+      operationId: chat
+      summary: Send a message to the Head Gardener
+      description: |
+        Streaming chat endpoint for interacting with the Head Gardener agent.
+        Returns a Server-Sent Events stream with assistant responses.
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Streaming response
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of chat responses
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/system/status:
+    get:
+      operationId: getSystemStatus
+      summary: Get system health and workflow status
+      description: Returns current system metrics and workflow run statistics
+      tags:
+        - System
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatus'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/approvals:
+    get:
+      operationId: listApprovals
+      summary: List pending approval requests
+      description: Returns all pending approval requests awaiting human decision
+      tags:
+        - Approvals
+      parameters:
+        - name: status
+          in: query
+          description: Filter by approval status
+          schema:
+            type: string
+            enum: [pending, approved, rejected]
+            default: pending
+        - name: limit
+          in: query
+          description: Maximum number of results
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Offset for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of approval requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/approvals/{runId}/resume:
+    post:
+      operationId: resumeWorkflow
+      summary: Resume a suspended workflow with a decision
+      description: |
+        Submit a human decision to resume a suspended workflow.
+        The workflow will continue execution based on the decision.
+      tags:
+        - Approvals
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          description: Workflow run ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResumeRequest'
+      responses:
+        '200':
+          description: Workflow resumed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/workflows:
+    get:
+      operationId: listWorkflowRuns
+      summary: List workflow runs
+      description: Returns workflow execution history
+      tags:
+        - Workflows
+      parameters:
+        - name: type
+          in: query
+          description: Filter by workflow type
+          schema:
+            type: string
+            enum: [morning-hygiene, deep-deduplication, gap-filling, manual]
+        - name: status
+          in: query
+          description: Filter by workflow status
+          schema:
+            type: string
+            enum: [running, suspended, completed, failed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: List of workflow runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      operationId: triggerWorkflow
+      summary: Manually trigger a workflow
+      description: Start a workflow execution on demand
+      tags:
+        - Workflows
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerWorkflowRequest'
+      responses:
+        '202':
+          description: Workflow triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRun'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/workflows/{runId}:
+    get:
+      operationId: getWorkflowRun
+      summary: Get workflow run details
+      description: Returns detailed information about a specific workflow run
+      tags:
+        - Workflows
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Workflow run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowRun'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/audit:
+    get:
+      operationId: queryAuditLog
+      summary: Query audit log entries
+      description: Search and filter audit log entries
+      tags:
+        - Audit
+      parameters:
+        - name: from
+          in: query
+          description: Start date (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: End date (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: action
+          in: query
+          description: Filter by action type
+          schema:
+            type: string
+            enum: [create, update, delete, merge, skip, flag, error]
+        - name: entityId
+          in: query
+          description: Filter by entity ID
+          schema:
+            type: string
+        - name: workflowType
+          in: query
+          description: Filter by workflow type
+          schema:
+            type: string
+            enum: [morning-hygiene, deep-deduplication, gap-filling, manual]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/issues:
+    get:
+      operationId: listIssues
+      summary: List detected gardening issues
+      description: Returns issues detected by the gardening system
+      tags:
+        - Issues
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [orphan, duplicate, missing_data, schema_violation, supernode]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, pending_approval, resolved, ignored]
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: List of issues
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  schemas:
+    ChatRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+
+    SystemStatus:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        workflows:
+          type: object
+          properties:
+            completed:
+              type: integer
+            failed:
+              type: integer
+            suspended:
+              type: integer
+        items:
+          type: object
+          properties:
+            processed:
+              type: integer
+            autoFixed:
+              type: integer
+            flagged:
+              type: integer
+        approvals:
+          type: object
+          properties:
+            pending:
+              type: integer
+            approved:
+              type: integer
+            rejected:
+              type: integer
+        errors:
+          type: object
+          properties:
+            rate:
+              type: number
+              description: Error rate percentage in last 5 minutes
+            total:
+              type: integer
+        uptime:
+          type: integer
+          description: Seconds since system start
+
+    ApprovalRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowRunId:
+          type: string
+          format: uuid
+        stepId:
+          type: string
+        issueId:
+          type: string
+          format: uuid
+        proposedAction:
+          type: string
+          enum: [merge, delete, enrich, reassign_brand, change_category]
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeCandidate'
+        reasoning:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        createdAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        resolvedAt:
+          type: string
+          format: date-time
+        resolvedBy:
+          type: string
+        resolution:
+          $ref: '#/components/schemas/ApprovalResolution'
+
+    NodeCandidate:
+      type: object
+      properties:
+        nodeId:
+          type: string
+        nodeName:
+          type: string
+        nodeProperties:
+          type: object
+          additionalProperties: true
+        relationships:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeRelationship'
+
+    NodeRelationship:
+      type: object
+      properties:
+        type:
+          type: string
+        direction:
+          type: string
+          enum: [incoming, outgoing]
+        targetId:
+          type: string
+        targetName:
+          type: string
+
+    ApprovalResolution:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        notes:
+          type: string
+        propertyResolutions:
+          type: object
+          additionalProperties: true
+
+    ApprovalListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalRequest'
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    ResumeRequest:
+      type: object
+      required:
+        - stepId
+        - decision
+      properties:
+        stepId:
+          type: string
+        decision:
+          type: string
+          enum: [approve, reject]
+        notes:
+          type: string
+        propertyResolutions:
+          type: object
+          additionalProperties: true
+          description: Resolution for property conflicts (key = property name, value = chosen value)
+
+    ResumeResponse:
+      type: object
+      properties:
+        workflowRunId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [running, completed, failed]
+        message:
+          type: string
+
+    WorkflowRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowType:
+          type: string
+          enum: [morning-hygiene, deep-deduplication, gap-filling, manual]
+        triggeredBy:
+          type: string
+          enum: [schedule, manual, event]
+        triggeredAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [running, suspended, completed, failed]
+        completedAt:
+          type: string
+          format: date-time
+        statistics:
+          $ref: '#/components/schemas/WorkflowStatistics'
+        suspendedSteps:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuspendedStep'
+        error:
+          $ref: '#/components/schemas/WorkflowError'
+
+    WorkflowStatistics:
+      type: object
+      properties:
+        itemsProcessed:
+          type: integer
+        issuesDetected:
+          type: integer
+        autoFixed:
+          type: integer
+        flaggedForReview:
+          type: integer
+        errors:
+          type: integer
+
+    SuspendedStep:
+      type: object
+      properties:
+        stepId:
+          type: string
+        approvalId:
+          type: string
+          format: uuid
+        suspendedAt:
+          type: string
+          format: date-time
+
+    WorkflowError:
+      type: object
+      properties:
+        message:
+          type: string
+        stack:
+          type: string
+
+    WorkflowListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowRun'
+        total:
+          type: integer
+
+    TriggerWorkflowRequest:
+      type: object
+      required:
+        - workflowType
+      properties:
+        workflowType:
+          type: string
+          enum: [morning-hygiene, deep-deduplication, gap-filling]
+        scope:
+          type: object
+          description: Optional scope filter for targeted workflows
+          properties:
+            category:
+              type: string
+              description: Limit to specific category
+            brandId:
+              type: string
+              description: Limit to specific brand
+
+    AuditEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        workflowRunId:
+          type: string
+          format: uuid
+        workflowType:
+          type: string
+          enum: [morning-hygiene, deep-deduplication, gap-filling, manual]
+        action:
+          type: string
+          enum: [create, update, delete, merge, skip, flag, error]
+        entityId:
+          type: string
+        entityType:
+          type: string
+        before:
+          type: object
+          nullable: true
+          additionalProperties: true
+        after:
+          type: object
+          nullable: true
+          additionalProperties: true
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        reasoning:
+          type: string
+        issueId:
+          type: string
+          format: uuid
+        approvalId:
+          type: string
+          format: uuid
+
+    AuditLogResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        total:
+          type: integer
+
+    GardeningIssue:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [orphan, duplicate, missing_data, schema_violation, supernode]
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        entities:
+          type: array
+          items:
+            type: string
+        suggestedAction:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        status:
+          type: string
+          enum: [open, pending_approval, resolved, ignored]
+        detectedAt:
+          type: string
+          format: date-time
+        workflowRunId:
+          type: string
+          format: uuid
+        graphContext:
+          type: object
+          additionalProperties: true
+
+    IssueListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/GardeningIssue'
+        total:
+          type: integer
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Chat
+    description: Head Gardener chat interface
+  - name: System
+    description: System health and metrics
+  - name: Approvals
+    description: Human-in-the-loop approval management
+  - name: Workflows
+    description: Workflow execution management
+  - name: Audit
+    description: Audit log queries
+  - name: Issues
+    description: Detected gardening issues

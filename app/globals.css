@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 249, 250, 251;
+  --background-end-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+}
+
+/* Chat interface styles */
+.chat-container {
+  @apply max-w-4xl mx-auto;
+}
+
+.chat-message {
+  @apply p-4 rounded-lg mb-4;
+}
+
+.chat-message.user {
+  @apply bg-blue-100 ml-12;
+}
+
+.chat-message.assistant {
+  @apply bg-gray-100 mr-12;
+}
+
+.chat-input {
+  @apply w-full p-4 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+}
+
+/* Status indicators */
+.status-badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.status-badge.running {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.status-badge.completed {
+  @apply bg-green-100 text-green-800;
+}
+
+.status-badge.failed {
+  @apply bg-red-100 text-red-800;
+}
+
+.status-badge.suspended {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.status-badge.pending {
+  @apply bg-gray-100 text-gray-800;
+}
+
+/* Approval card styles */
+.approval-card {
+  @apply bg-white rounded-lg shadow p-6 mb-4 border-l-4 border-yellow-400;
+}
+
+.approval-card .node-info {
+  @apply bg-gray-50 p-4 rounded-md font-mono text-sm;
+}
+
+/* Metrics grid */
+.metrics-grid {
+  @apply grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4;
+}
+
+.metric-card {
+  @apply bg-white rounded-lg shadow p-6;
+}
+
+.metric-value {
+  @apply text-3xl font-bold text-gray-900;
+}
+
+.metric-label {
+  @apply text-sm text-gray-500 mt-1;
+}
