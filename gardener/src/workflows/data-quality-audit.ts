@@ -1,6 +1,13 @@
-import { Workflow, Step } from "@mastra/core/workflows";
+import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { extractJson } from "../lib/utils.js";
+
+// ─── Schemas ─────────────────────────────────────────────────────────────────
+
+const triggerSchema = z.object({
+  scope: z.enum(["full", "brands", "products"]).default("full").describe("Scope of the audit"),
+  maxFixes: z.number().default(50).describe("Maximum number of fixes to apply"),
+});
 
 const issueSchema = z.object({
   type: z.string(),
@@ -11,18 +18,43 @@ const issueSchema = z.object({
   query: z.string().optional(),
 });
 
-const runQualityQueries = new Step({
+const qualityResultSchema = z.object({
+  issues: z.array(issueSchema),
+  totalIssues: z.number(),
+});
+
+const scoredSchema = z.object({
+  fixableIssues: z.array(issueSchema),
+  unfixableIssues: z.array(issueSchema),
+  priorityScore: z.number(),
+});
+
+const fixResultSchema = z.object({
+  fixed: z.number(),
+  attempted: z.number(),
+  details: z.string(),
+});
+
+const reportSchema = z.object({
+  summary: z.string(),
+  issuesFound: z.number(),
+  issuesFixed: z.number(),
+  issuesRemaining: z.number(),
+  priorityScore: z.number(),
+  report: z.string(),
+});
+
+// ─── Steps ───────────────────────────────────────────────────────────────────
+
+const runQualityQueries = createStep({
   id: "run-quality-queries",
-  description: "Run data quality queries to find issues across the graph",
-  outputSchema: z.object({
-    issues: z.array(issueSchema),
-    totalIssues: z.number(),
-  }),
-  execute: async ({ context, mastra }) => {
+  inputSchema: triggerSchema,
+  outputSchema: qualityResultSchema,
+  execute: async ({ mastra }) => {
+    const fallback = { issues: [] as Array<z.infer<typeof issueSchema>>, totalIssues: 0 };
+
     if (!mastra) throw new Error("Mastra context is required");
     const agent = mastra.getAgent("Gardener");
-
-    const fallback = { issues: [] as Array<z.infer<typeof issueSchema>>, totalIssues: 0 };
 
     let result;
     try {
@@ -74,8 +106,7 @@ const runQualityQueries = new Step({
             "affectedNodes": <count>,
             "fixable": <boolean>,
             "query": "<the query used>"
-          },
-          ...
+          }
         ],
         "totalIssues": <number>
       }`,
@@ -88,52 +119,28 @@ const runQualityQueries = new Step({
 
     const parsed = extractJson(result.text);
     if (parsed && typeof parsed === "object") {
-      return parsed as typeof fallback;
+      return parsed as z.infer<typeof qualityResultSchema>;
     }
-
     return fallback;
   },
 });
 
-const scoreIssues = new Step({
+const scoreIssues = createStep({
   id: "score-issues",
-  description: "Score and prioritize issues by severity and fixability",
-  outputSchema: z.object({
-    fixableIssues: z.array(issueSchema),
-    unfixableIssues: z.array(issueSchema),
-    priorityScore: z.number(),
-  }),
-  execute: async ({ context }) => {
-    const qualityResult = context.getStepResult<{
-      issues: Array<{
-        type: string;
-        severity: string;
-        description: string;
-        affectedNodes: number;
-        fixable: boolean;
-        query?: string;
-      }>;
-    }>("run-quality-queries");
-
-    const severityWeight: Record<string, number> = {
-      critical: 4,
-      high: 3,
-      medium: 2,
-      low: 1,
-    };
+  inputSchema: qualityResultSchema,
+  outputSchema: scoredSchema,
+  execute: async ({ inputData: qualityResult }) => {
+    const severityWeight: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
     const scored = qualityResult.issues.map((issue) => ({
       ...issue,
-      score:
-        (severityWeight[issue.severity] || 1) *
-        Math.log2(issue.affectedNodes + 1),
+      score: (severityWeight[issue.severity] || 1) * Math.log2(issue.affectedNodes + 1),
     }));
 
     scored.sort((a, b) => b.score - a.score);
 
     const fixable = scored.filter((i) => i.fixable);
     const unfixable = scored.filter((i) => !i.fixable);
-
     const totalScore = scored.reduce((sum, i) => sum + i.score, 0);
 
     return {
@@ -144,23 +151,12 @@ const scoreIssues = new Step({
   },
 });
 
-const fixIssues = new Step({
+const fixIssues = createStep({
   id: "fix-issues",
-  description: "Research and fix fixable data quality issues",
-  outputSchema: z.object({
-    fixed: z.number(),
-    attempted: z.number(),
-    details: z.string(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const scored = context.getStepResult<{
-      fixableIssues: Array<{
-        type: string;
-        severity: string;
-        description: string;
-        affectedNodes: number;
-      }>;
-    }>("score-issues");
+  inputSchema: scoredSchema,
+  outputSchema: fixResultSchema,
+  execute: async ({ inputData: scored, mastra, getInitData }) => {
+    const { maxFixes } = getInitData<typeof triggerSchema>();
 
     if (scored.fixableIssues.length === 0) {
       return { fixed: 0, attempted: 0, details: "No fixable issues found" };
@@ -169,14 +165,9 @@ const fixIssues = new Step({
     if (!mastra) throw new Error("Mastra context is required");
     const agent = mastra.getAgent("Gardener");
 
-    // Use maxFixes from trigger data instead of hardcoded 10
-    const maxFixes = context.triggerData.maxFixes ?? 50;
-    const topIssues = scored.fixableIssues.slice(0, maxFixes);
+    const topIssues = scored.fixableIssues.slice(0, maxFixes ?? 50);
     const issueList = topIssues
-      .map(
-        (i, idx) =>
-          `${idx + 1}. [${i.severity}] ${i.description} (${i.affectedNodes} nodes)`,
-      )
+      .map((i, idx) => `${idx + 1}. [${i.severity}] ${i.description} (${i.affectedNodes} nodes)`)
       .join("\n");
 
     let result;
@@ -195,7 +186,7 @@ const fixIssues = new Step({
       IMPORTANT:
       - Never DELETE nodes — only SET properties
       - For suspicious values, research the correct value before overwriting
-      - For duplicates, do NOT fix them in this step — just report them
+      - For duplicates, use the mergeNodes tool: pick the node with more data as keepGearId
       - Limit fixes to 20 nodes per issue to avoid runaway operations
 
       End your response with a JSON summary: { "writesSucceeded": <number>, "writesFailed": <number> }`,
@@ -206,44 +197,18 @@ const fixIssues = new Step({
       return { fixed: 0, attempted: topIssues.length, details: "Agent error during fix" };
     }
 
-    const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
-    const fixCount = parsed?.writesSucceeded ?? 0;
-
-    return {
-      fixed: fixCount,
-      attempted: topIssues.length,
-      details: result.text,
-    };
+    const parsed = extractJson(result.text) as { writesSucceeded?: number } | null;
+    return { fixed: parsed?.writesSucceeded ?? 0, attempted: topIssues.length, details: result.text };
   },
 });
 
-const generateReport = new Step({
+const generateReport = createStep({
   id: "generate-report",
-  description: "Generate a summary report of the audit",
-  outputSchema: z.object({
-    summary: z.string(),
-    issuesFound: z.number(),
-    issuesFixed: z.number(),
-    issuesRemaining: z.number(),
-    priorityScore: z.number(),
-    report: z.string(),
-  }),
-  execute: async ({ context }) => {
-    const scored = context.getStepResult<{
-      fixableIssues: Array<{ type: string; severity: string; description: string; affectedNodes: number }>;
-      unfixableIssues: Array<{ type: string; severity: string; description: string; affectedNodes: number }>;
-      priorityScore: number;
-    }>("score-issues");
-
-    const fixes = context.getStepResult<{
-      fixed: number;
-      attempted: number;
-    }>("fix-issues");
-
-    // Compute totalIssues from array length instead of trusting LLM
+  inputSchema: fixResultSchema,
+  outputSchema: reportSchema,
+  execute: async ({ inputData: fixes, getStepResult }) => {
+    const scored = getStepResult(scoreIssues);
     const issuesFound = scored.fixableIssues.length + scored.unfixableIssues.length;
-
-    // Clamp remaining to prevent negative values
     const remaining = Math.max(0, issuesFound - fixes.fixed);
 
     const reportLines = [
@@ -258,8 +223,7 @@ const generateReport = new Step({
       ``,
       `## Unfixable Issues (require human review)`,
       ...scored.unfixableIssues.map(
-        (i) =>
-          `- [${i.severity.toUpperCase()}] ${i.description} (${i.affectedNodes} nodes)`,
+        (i) => `- [${i.severity.toUpperCase()}] ${i.description} (${i.affectedNodes} nodes)`,
       ),
       ``,
       `## Fixed Issues`,
@@ -277,20 +241,14 @@ const generateReport = new Step({
   },
 });
 
-export const dataQualityAudit = new Workflow({
-  name: "data-quality-audit",
-  triggerSchema: z.object({
-    scope: z
-      .enum(["full", "brands", "products"])
-      .default("full")
-      .describe("Scope of the audit"),
-    maxFixes: z
-      .number()
-      .default(50)
-      .describe("Maximum number of fixes to apply"),
-  }),
+// ─── Workflow ─────────────────────────────────────────────────────────────────
+
+export const dataQualityAudit = createWorkflow({
+  id: "data-quality-audit",
+  inputSchema: triggerSchema,
+  outputSchema: reportSchema,
 })
-  .step(runQualityQueries)
+  .then(runQualityQueries)
   .then(scoreIssues)
   .then(fixIssues)
   .then(generateReport)

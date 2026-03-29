@@ -1,27 +1,53 @@
-import { Workflow, Step } from "@mastra/core/workflows";
+import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { extractJson, sanitizeBrandName, sanitizeWebContent } from "../lib/utils.js";
 
-const assessBrand = new Step({
-  id: "assess-brand",
-  description: "Check what data already exists for this brand in the graph",
-  outputSchema: z.object({
-    brand: z.string(),
-    exists: z.boolean(),
-    productCount: z.number(),
-    familyCount: z.number(),
-    technologyCount: z.number(),
-    hasDescription: z.boolean(),
-    hasWebsite: z.boolean(),
-    hasCountry: z.boolean(),
-    completenessScore: z.number(),
-    gaps: z.array(z.string()),
-  }),
-  execute: async ({ context, mastra }) => {
-    const brandName = sanitizeBrandName(context.triggerData.brandName);
+// ─── Output-Schemas ───────────────────────────────────────────────────────────
 
-    if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+const assessmentSchema = z.object({
+  brand: z.string(),
+  exists: z.boolean(),
+  productCount: z.number(),
+  familyCount: z.number(),
+  technologyCount: z.number(),
+  hasDescription: z.boolean(),
+  hasWebsite: z.boolean(),
+  hasCountry: z.boolean(),
+  completenessScore: z.number(),
+  gaps: z.array(z.string()),
+});
+
+const researchSchema = z.object({
+  action: z.enum(["skip", "enrich"]),
+  reason: z.string().optional(),
+  data: z.string().optional(),
+});
+
+const writeSchema = z.object({
+  written: z.number(),
+  skipped: z.boolean(),
+  details: z.string().optional(),
+});
+
+const improvementSchema = z.object({
+  brand: z.string(),
+  scoreBefore: z.number(),
+  scoreAfter: z.number(),
+  improved: z.boolean(),
+});
+
+const triggerSchema = z.object({
+  brandName: z.string().describe("The brand name to enrich"),
+});
+
+// ─── Steps ───────────────────────────────────────────────────────────────────
+
+const assessBrand = createStep({
+  id: "assess-brand",
+  inputSchema: triggerSchema,
+  outputSchema: assessmentSchema,
+  execute: async ({ inputData, mastra }) => {
+    const brandName = sanitizeBrandName(inputData.brandName);
 
     const fallback = {
       brand: brandName,
@@ -35,6 +61,9 @@ const assessBrand = new Step({
       completenessScore: 0,
       gaps: ["brand not found in graph"],
     };
+
+    if (!mastra) throw new Error("Mastra context is required");
+    const agent = mastra.getAgent("Gardener");
 
     let result;
     try {
@@ -76,34 +105,19 @@ const assessBrand = new Step({
 
     const parsed = extractJson(result.text);
     if (parsed && typeof parsed === "object") {
-      return parsed as typeof fallback;
+      return parsed as z.infer<typeof assessmentSchema>;
     }
-
     return fallback;
   },
 });
 
-const researchGaps = new Step({
+const researchGaps = createStep({
   id: "research-gaps",
-  description:
-    "Scrape manufacturer website and search for missing information",
-  outputSchema: z.object({
-    action: z.enum(["skip", "enrich"]),
-    reason: z.string().optional(),
-    data: z.string().optional(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const assessment = context.getStepResult<{
-      completenessScore: number;
-      brand: string;
-      gaps: string[];
-    }>("assess-brand");
-
+  inputSchema: assessmentSchema,
+  outputSchema: researchSchema,
+  execute: async ({ inputData: assessment, mastra }) => {
     if (assessment.completenessScore > 0.8) {
-      return {
-        action: "skip" as const,
-        reason: "Brand is sufficiently complete",
-      };
+      return { action: "skip" as const, reason: "Brand is sufficiently complete" };
     }
 
     if (!mastra) throw new Error("Mastra context is required");
@@ -134,21 +148,11 @@ const researchGaps = new Step({
   },
 });
 
-const validateAndWrite = new Step({
+const validateAndWrite = createStep({
   id: "validate-and-write",
-  description:
-    "Validate researched data against ontology and write to graph",
-  outputSchema: z.object({
-    written: z.number(),
-    skipped: z.boolean(),
-    details: z.string().optional(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const research = context.getStepResult<{
-      action: string;
-      data?: string;
-    }>("research-gaps");
-
+  inputSchema: researchSchema,
+  outputSchema: writeSchema,
+  execute: async ({ inputData: research, mastra }) => {
     if (research.action === "skip") {
       return { written: 0, skipped: true };
     }
@@ -156,7 +160,6 @@ const validateAndWrite = new Step({
     if (!mastra) throw new Error("Mastra context is required");
     const agent = mastra.getAgent("Gardener");
 
-    // Sanitize web-scraped content before embedding in prompt to mitigate indirect prompt injection
     const sanitizedData = research.data ? sanitizeWebContent(research.data) : "";
 
     let result;
@@ -189,39 +192,21 @@ const validateAndWrite = new Step({
       return { written: 0, skipped: false, details: "Agent error during write" };
     }
 
-    const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
-    const writeCount = parsed?.writesSucceeded ?? 0;
-
-    return { written: writeCount, skipped: false, details: result.text };
+    const parsed = extractJson(result.text) as { writesSucceeded?: number } | null;
+    return { written: parsed?.writesSucceeded ?? 0, skipped: false, details: result.text };
   },
 });
 
-const verifyImprovement = new Step({
+const verifyImprovement = createStep({
   id: "verify-improvement",
-  description: "Re-assess brand completeness after enrichment",
-  outputSchema: z.object({
-    brand: z.string(),
-    scoreBefore: z.number(),
-    scoreAfter: z.number(),
-    improved: z.boolean(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const brandName = context.triggerData.brandName;
-    const before = context.getStepResult<{
-      completenessScore: number;
-    }>("assess-brand").completenessScore;
-
-    const writeResult = context.getStepResult<{
-      skipped: boolean;
-    }>("validate-and-write");
+  inputSchema: writeSchema,
+  outputSchema: improvementSchema,
+  execute: async ({ inputData: writeResult, mastra, getStepResult, getInitData }) => {
+    const { brandName } = getInitData<typeof triggerSchema>();
+    const { completenessScore: scoreBefore } = getStepResult(assessBrand);
 
     if (writeResult.skipped) {
-      return {
-        brand: brandName,
-        scoreBefore: before,
-        scoreAfter: before,
-        improved: false,
-      };
+      return { brand: brandName, scoreBefore, scoreAfter: scoreBefore, improved: false };
     }
 
     if (!mastra) throw new Error("Mastra context is required");
@@ -231,7 +216,7 @@ const verifyImprovement = new Step({
     try {
       after = await agent.generate(
         `Re-assess the completeness of brand "${brandName}" in the GearGraph.
-      Previous score was ${(before * 100).toFixed(0)}%.
+      Previous score was ${(scoreBefore * 100).toFixed(0)}%.
       Query the graph and calculate the new completeness score.
 
       Use graphQuery to check:
@@ -245,36 +230,24 @@ const verifyImprovement = new Step({
       );
     } catch (err) {
       console.error("[verify-improvement] agent.generate() failed:", err);
-      return {
-        brand: brandName,
-        scoreBefore: before,
-        scoreAfter: before,
-        improved: false,
-      };
+      return { brand: brandName, scoreBefore, scoreAfter: scoreBefore, improved: false };
     }
 
-    let scoreAfter = before;
     const parsed = extractJson(after.text) as { completenessScore?: number } | null;
-    if (parsed?.completenessScore != null) {
-      scoreAfter = parsed.completenessScore;
-    }
+    const scoreAfter = parsed?.completenessScore ?? scoreBefore;
 
-    return {
-      brand: brandName,
-      scoreBefore: before,
-      scoreAfter,
-      improved: scoreAfter > before,
-    };
+    return { brand: brandName, scoreBefore, scoreAfter, improved: scoreAfter > scoreBefore };
   },
 });
 
-export const brandEnrichment = new Workflow({
-  name: "brand-enrichment",
-  triggerSchema: z.object({
-    brandName: z.string().describe("The brand name to enrich"),
-  }),
+// ─── Workflow ─────────────────────────────────────────────────────────────────
+
+export const brandEnrichment = createWorkflow({
+  id: "brand-enrichment",
+  inputSchema: triggerSchema,
+  outputSchema: improvementSchema,
 })
-  .step(assessBrand)
+  .then(assessBrand)
   .then(researchGaps)
   .then(validateAndWrite)
   .then(verifyImprovement)

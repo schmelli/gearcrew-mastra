@@ -15,5 +15,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/workflows", "src/evals"]
+  "exclude": ["node_modules", "dist", "src/evals"]
 }

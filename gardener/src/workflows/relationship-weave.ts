@@ -1,6 +1,15 @@
-import { Workflow, Step } from "@mastra/core/workflows";
+import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { extractJson } from "../lib/utils.js";
+
+// ─── Schemas ─────────────────────────────────────────────────────────────────
+
+const triggerSchema = z.object({
+  types: z
+    .array(z.enum(["competitors", "pairings", "alternatives"]))
+    .default(["competitors", "pairings", "alternatives"])
+    .describe("Which relationship types to discover"),
+});
 
 const candidateSchema = z.object({
   sourceGearId: z.string(),
@@ -12,17 +21,25 @@ const candidateSchema = z.object({
   reasoning: z.string(),
 });
 
-const findCompetitors = new Step({
+const candidatesSchema = z.object({
+  candidates: z.array(candidateSchema),
+  skipped: z.boolean(),
+});
+
+const writeRelSchema = z.object({
+  written: z.number(),
+  skipped: z.number(),
+  details: z.string(),
+});
+
+// ─── Steps ───────────────────────────────────────────────────────────────────
+
+const findCompetitors = createStep({
   id: "find-competitors",
-  description:
-    "Find GearItems in same category + price range without COMPETES_WITH edges",
-  outputSchema: z.object({
-    candidates: z.array(candidateSchema),
-    skipped: z.boolean(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const types = context.triggerData.types as string[];
-    if (!types.includes("competitors")) {
+  inputSchema: triggerSchema,
+  outputSchema: candidatesSchema,
+  execute: async ({ inputData, mastra }) => {
+    if (!inputData.types.includes("competitors")) {
       return { candidates: [], skipped: true };
     }
 
@@ -57,15 +74,12 @@ const findCompetitors = new Step({
       {
         "candidates": [
           {
-            "sourceGearId": "...",
-            "sourceName": "...",
-            "targetGearId": "...",
-            "targetName": "...",
+            "sourceGearId": "...", "sourceName": "...",
+            "targetGearId": "...", "targetName": "...",
             "relationshipType": "ALTERNATIVE_TO",
             "confidence": "high|medium|low",
             "reasoning": "..."
-          },
-          ...
+          }
         ]
       }`,
         { toolChoice: "required" },
@@ -79,21 +93,16 @@ const findCompetitors = new Step({
     if (parsed && typeof parsed === "object") {
       return { ...(parsed as { candidates: Array<z.infer<typeof candidateSchema>> }), skipped: false };
     }
-
     return fallback;
   },
 });
 
-const findPairings = new Step({
+const findPairings = createStep({
   id: "find-pairings",
-  description:
-    "Find GearItems commonly used together without PAIRS_WITH edges",
-  outputSchema: z.object({
-    candidates: z.array(candidateSchema),
-    skipped: z.boolean(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const types = context.triggerData.types as string[];
+  inputSchema: candidatesSchema,
+  outputSchema: candidatesSchema,
+  execute: async ({ mastra, getInitData }) => {
+    const { types } = getInitData<typeof triggerSchema>();
     if (!types.includes("pairings")) {
       return { candidates: [], skipped: true };
     }
@@ -133,15 +142,12 @@ const findPairings = new Step({
       {
         "candidates": [
           {
-            "sourceGearId": "...",
-            "sourceName": "...",
-            "targetGearId": "...",
-            "targetName": "...",
+            "sourceGearId": "...", "sourceName": "...",
+            "targetGearId": "...", "targetName": "...",
             "relationshipType": "PAIRS_WITH",
             "confidence": "high|medium|low",
             "reasoning": "..."
-          },
-          ...
+          }
         ]
       }`,
         { toolChoice: "required" },
@@ -155,21 +161,16 @@ const findPairings = new Step({
     if (parsed && typeof parsed === "object") {
       return { ...(parsed as { candidates: Array<z.infer<typeof candidateSchema>> }), skipped: false };
     }
-
     return fallback;
   },
 });
 
-const findFamilyAlternatives = new Step({
+const findFamilyAlternatives = createStep({
   id: "find-family-alternatives",
-  description:
-    "Find ProductFamilies without ALTERNATIVE_TO connections",
-  outputSchema: z.object({
-    candidates: z.array(candidateSchema),
-    skipped: z.boolean(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const types = context.triggerData.types as string[];
+  inputSchema: candidatesSchema,
+  outputSchema: candidatesSchema,
+  execute: async ({ mastra, getInitData }) => {
+    const { types } = getInitData<typeof triggerSchema>();
     if (!types.includes("alternatives")) {
       return { candidates: [], skipped: true };
     }
@@ -199,10 +200,7 @@ const findFamilyAlternatives = new Step({
 
       Evaluate which items from different families are true alternatives.
 
-      Return ONLY a JSON object:
-      {
-        "candidates": [...]
-      }`,
+      Return ONLY a JSON object: { "candidates": [...] }`,
         { toolChoice: "required" },
       );
     } catch (err) {
@@ -214,49 +212,18 @@ const findFamilyAlternatives = new Step({
     if (parsed && typeof parsed === "object") {
       return { ...(parsed as { candidates: Array<z.infer<typeof candidateSchema>> }), skipped: false };
     }
-
     return fallback;
   },
 });
 
-const validateAndWriteRelationships = new Step({
+const validateAndWriteRelationships = createStep({
   id: "validate-and-write-relationships",
-  description:
-    "Validate candidate relationships against ontology and write to graph",
-  outputSchema: z.object({
-    written: z.number(),
-    skipped: z.number(),
-    details: z.string(),
-  }),
-  execute: async ({ context, mastra }) => {
-    const competitors = context.getStepResult<{
-      candidates: Array<{
-        sourceGearId: string;
-        targetGearId: string;
-        relationshipType: string;
-        confidence: string;
-      }>;
-    }>("find-competitors");
+  inputSchema: candidatesSchema,
+  outputSchema: writeRelSchema,
+  execute: async ({ inputData: familyAlts, mastra, getStepResult }) => {
+    const competitors = getStepResult(findCompetitors);
+    const pairings = getStepResult(findPairings);
 
-    const pairings = context.getStepResult<{
-      candidates: Array<{
-        sourceGearId: string;
-        targetGearId: string;
-        relationshipType: string;
-        confidence: string;
-      }>;
-    }>("find-pairings");
-
-    const familyAlts = context.getStepResult<{
-      candidates: Array<{
-        sourceGearId: string;
-        targetGearId: string;
-        relationshipType: string;
-        confidence: string;
-      }>;
-    }>("find-family-alternatives");
-
-    // Combine all candidates, filter to medium+ confidence
     const allCandidates = [
       ...competitors.candidates,
       ...pairings.candidates,
@@ -264,21 +231,14 @@ const validateAndWriteRelationships = new Step({
     ].filter((c) => c.confidence !== "low");
 
     if (allCandidates.length === 0) {
-      return {
-        written: 0,
-        skipped: 0,
-        details: "No high/medium confidence candidates found",
-      };
+      return { written: 0, skipped: 0, details: "No high/medium confidence candidates found" };
     }
 
     if (!mastra) throw new Error("Mastra context is required");
     const agent = mastra.getAgent("Gardener");
 
     const candidateList = allCandidates
-      .map(
-        (c) =>
-          `- (${c.sourceGearId})-[:${c.relationshipType}]->(${c.targetGearId}) [${c.confidence}]`,
-      )
+      .map((c) => `- (${c.sourceGearId})-[:${c.relationshipType}]->(${c.targetGearId}) [${c.confidence}]`)
       .join("\n");
 
     let result;
@@ -305,34 +265,24 @@ const validateAndWriteRelationships = new Step({
       );
     } catch (err) {
       console.error("[validate-and-write-relationships] agent.generate() failed:", err);
-      return {
-        written: 0,
-        skipped: allCandidates.length,
-        details: "Agent error during relationship writes",
-      };
+      return { written: 0, skipped: allCandidates.length, details: "Agent error during relationship writes" };
     }
 
-    const parsed = extractJson(result.text) as { writesSucceeded?: number; writesFailed?: number } | null;
+    const parsed = extractJson(result.text) as { writesSucceeded?: number } | null;
     const writeCount = parsed?.writesSucceeded ?? 0;
 
-    return {
-      written: writeCount,
-      skipped: allCandidates.length - writeCount,
-      details: result.text,
-    };
+    return { written: writeCount, skipped: allCandidates.length - writeCount, details: result.text };
   },
 });
 
-export const relationshipWeave = new Workflow({
-  name: "relationship-weave",
-  triggerSchema: z.object({
-    types: z
-      .array(z.enum(["competitors", "pairings", "alternatives"]))
-      .default(["competitors", "pairings", "alternatives"])
-      .describe("Which relationship types to discover"),
-  }),
+// ─── Workflow ─────────────────────────────────────────────────────────────────
+
+export const relationshipWeave = createWorkflow({
+  id: "relationship-weave",
+  inputSchema: triggerSchema,
+  outputSchema: writeRelSchema,
 })
-  .step(findCompetitors)
+  .then(findCompetitors)
   .then(findPairings)
   .then(findFamilyAlternatives)
   .then(validateAndWriteRelationships)
