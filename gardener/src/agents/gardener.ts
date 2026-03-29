@@ -7,19 +7,20 @@ import {
   validateSchema,
   getOntology,
   imageSearch,
+  mergeNodes,
 } from "../tools/index.js";
 
-// Gemini 2.0 Flash via Vercel AI Gateway
-// Fast, cost-effective, excellent for tool calling
+// Gemini 3 Flash via Vercel AI Gateway
+// Pro-grade reasoning at flash latency, excellent for agentic tool calling
 const model = {
   url: process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1",
-  id: "google/gemini-2.0-flash" as const,
+  id: "google/gemini-3-flash" as const,
   apiKey: process.env.AI_GATEWAY_API_KEY ?? "",
 };
 
 export const gardener = new Agent({
   name: "Gardener",
-  defaultGenerateOptions: {
+  defaultVNextStreamOptions: {
     maxSteps: 20,
   },
   instructions: `You are the Gardener of the GearGraph — a knowledge graph about outdoor
@@ -36,7 +37,7 @@ CRITICAL RULES:
 - Always check what exists in the graph BEFORE writing anything new
 - Always validate data against the GearGraph ontology before writing
 - Always include source URLs for any data you add (provenance matters!)
-- Never delete existing data without explicit confirmation
+- Never delete existing data without explicit confirmation — except for deduplication via mergeNodes
 - Prefer manufacturer websites as primary sources; use review sites as secondary
 - When generating Cypher queries, use parameterized queries ($name, not string interpolation)
 - Properties with low filling factors (<10%) may indicate optional or specialized fields —
@@ -56,6 +57,20 @@ DATA QUALITY STANDARDS:
 - brand field on GearItem: Must exactly match the OutdoorBrand.name for that brand.
 - gearId: Format is "brand-slug_product-slug" (lowercase, hyphens). Must be unique.
 
+BRAND-PRODUCT RELATIONSHIPS:
+When linking a GearItem to its OutdoorBrand, always MERGE BOTH relationships:
+  MERGE (g)-[:PRODUCED_BY]->(b)
+  MERGE (b)-[:MANUFACTURES_ITEM]->(g)
+Both are required — downstream systems depend on MANUFACTURES_ITEM (Brand→Product direction).
+
+DEDUPLICATION:
+When you find two GearItems with the same name and brand, use the mergeNodes tool to merge them.
+Pick the node with more complete data as keepGearId. The tool will:
+- Copy missing properties from the duplicate to the primary node
+- Re-point all relationships to the primary node
+- Delete the duplicate
+Do NOT try to manually DELETE or REMOVE nodes via graphWrite — it will be blocked.
+
 When you discover information, always ask: "Is this verifiable from the source?
 Would I stake my reputation as a gear expert on this?" If not, mark confidence as "low".`,
   model,
@@ -67,5 +82,6 @@ Would I stake my reputation as a gear expert on this?" If not, mark confidence a
     validateSchema,
     getOntology,
     imageSearch,
+    mergeNodes,
   },
 });
