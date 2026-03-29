@@ -179,7 +179,7 @@ const researchAndWriteNew = createStep({
   inputSchema: diffSchema,
   outputSchema: writeNewSchema,
   execute: async ({ inputData: diff, mastra, getInitData }) => {
-    const { brandName: brand } = getInitData<typeof triggerSchema>();
+    const { brandName: brand } = getInitData<z.infer<typeof triggerSchema>>();
 
     if (diff.newProducts.length === 0) {
       return { productsAdded: 0, productsSkipped: 0, details: "No new products to add" };
@@ -256,7 +256,7 @@ const verifyProductCount = createStep({
   inputSchema: writeNewSchema,
   outputSchema: verifySchema,
   execute: async ({ mastra, getStepResult, getInitData }) => {
-    const { brandName } = getInitData<typeof triggerSchema>();
+    const { brandName } = getInitData<z.infer<typeof triggerSchema>>();
     const { productCount: before } = getStepResult(getExistingProducts);
 
     if (!mastra) throw new Error("Mastra context is required");

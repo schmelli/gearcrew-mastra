@@ -156,7 +156,7 @@ const fixIssues = createStep({
   inputSchema: scoredSchema,
   outputSchema: fixResultSchema,
   execute: async ({ inputData: scored, mastra, getInitData }) => {
-    const { maxFixes } = getInitData<typeof triggerSchema>();
+    const { maxFixes } = getInitData<z.infer<typeof triggerSchema>>();
 
     if (scored.fixableIssues.length === 0) {
       return { fixed: 0, attempted: 0, details: "No fixable issues found" };

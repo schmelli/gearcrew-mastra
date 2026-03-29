@@ -102,7 +102,7 @@ const findPairings = createStep({
   inputSchema: candidatesSchema,
   outputSchema: candidatesSchema,
   execute: async ({ mastra, getInitData }) => {
-    const { types } = getInitData<typeof triggerSchema>();
+    const { types } = getInitData<z.infer<typeof triggerSchema>>();
     if (!types.includes("pairings")) {
       return { candidates: [], skipped: true };
     }
@@ -170,7 +170,7 @@ const findFamilyAlternatives = createStep({
   inputSchema: candidatesSchema,
   outputSchema: candidatesSchema,
   execute: async ({ mastra, getInitData }) => {
-    const { types } = getInitData<typeof triggerSchema>();
+    const { types } = getInitData<z.infer<typeof triggerSchema>>();
     if (!types.includes("alternatives")) {
       return { candidates: [], skipped: true };
     }

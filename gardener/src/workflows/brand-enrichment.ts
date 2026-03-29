@@ -202,7 +202,7 @@ const verifyImprovement = createStep({
   inputSchema: writeSchema,
   outputSchema: improvementSchema,
   execute: async ({ inputData: writeResult, mastra, getStepResult, getInitData }) => {
-    const { brandName } = getInitData<typeof triggerSchema>();
+    const { brandName } = getInitData<z.infer<typeof triggerSchema>>();
     const { completenessScore: scoreBefore } = getStepResult(assessBrand);
 
     if (writeResult.skipped) {
