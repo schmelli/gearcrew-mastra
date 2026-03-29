@@ -1,4 +1,4 @@
-import { Mastra } from "@mastra/core/mastra";
+import { Mastra } from "@mastra/core";
 import { gardener } from "../agents/gardener.js";
 import { brandEnrichment } from "../workflows/brand-enrichment.js";
 import { productDiscovery } from "../workflows/product-discovery.js";
