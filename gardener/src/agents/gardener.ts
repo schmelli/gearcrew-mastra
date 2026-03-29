@@ -11,10 +11,11 @@ import {
 import { formatErrorMapForPrompt } from "../lib/transcript-error-map.js";
 
 // Gemini 3 Flash via Vercel AI Gateway
-// Pro-grade reasoning at flash latency, excellent for agentic tool calling
+// Gemini 2.5 Flash — stable tool calling without thought_signature requirement
+// Note: Gemini 3 Flash requires thought_signatures which Mastra doesn't support yet
 const model = {
   url: process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1",
-  id: "google/gemini-3-flash" as const,
+  id: "google/gemini-2.5-flash" as const,
   apiKey: process.env.AI_GATEWAY_API_KEY ?? "",
 };
 
