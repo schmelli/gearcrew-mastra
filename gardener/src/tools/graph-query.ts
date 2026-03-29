@@ -22,7 +22,7 @@ Common queries:
     records: z.array(z.record(z.any())),
     summary: z.string(),
   }),
-  execute: async ({ context: { query, params } }) => {
+  execute: async ({ query, params }) => {
     const session = getReadSession();
     try {
       const result = await session.run(query, params || {});

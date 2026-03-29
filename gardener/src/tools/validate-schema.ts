@@ -34,7 +34,7 @@ ALWAYS call this before graphWrite.`,
     errors: z.array(z.string()),
     warnings: z.array(z.string()),
   }),
-  execute: async ({ context: { nodeLabel, properties, relationships } }) => {
+  execute: async ({ nodeLabel, properties, relationships }) => {
     const errors: string[] = [];
     const warnings: string[] = [];
 

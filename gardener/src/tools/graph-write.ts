@@ -26,7 +26,7 @@ After writing, always verify with a graphQuery read-back.`,
     relationshipsCreated: z.number(),
     summary: z.string(),
   }),
-  execute: async ({ context: { query, params, reason } }) => {
+  execute: async ({ query, params, reason }) => {
     const upper = query.toUpperCase();
 
     // Block destructive operations

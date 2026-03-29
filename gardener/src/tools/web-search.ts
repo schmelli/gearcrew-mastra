@@ -19,7 +19,7 @@ Keep queries specific: "MSR Hubba Hubba NX 2 2025 specs weight" not "MSR tents".
       }),
     ),
   }),
-  execute: async ({ context: { query, maxResults } }) => {
+  execute: async ({ query, maxResults }) => {
     const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) {
       throw new Error("SERPER_API_KEY environment variable is required");

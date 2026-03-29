@@ -21,7 +21,7 @@ Prefer manufacturer domain images when available.`,
       }),
     ),
   }),
-  execute: async ({ context: { query, maxResults } }) => {
+  execute: async ({ query, maxResults }) => {
     const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) {
       throw new Error("SERPER_API_KEY environment variable is required");

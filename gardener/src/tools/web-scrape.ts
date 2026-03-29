@@ -24,7 +24,7 @@ Rate limits apply — don't scrape more than 10 pages per minute.`,
     scrapedAt: z.string(),
     imageUrl: z.string().optional(),
   }),
-  execute: async ({ context: { url, extractSchema, format } }) => {
+  execute: async ({ url, extractSchema, format }) => {
     const apiKey = process.env.FIRECRAWL_API_KEY;
     if (!apiKey) {
       throw new Error("FIRECRAWL_API_KEY environment variable is required");
