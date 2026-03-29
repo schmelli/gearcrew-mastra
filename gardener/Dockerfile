@@ -20,4 +20,4 @@ ENV NODE_ENV=production
 USER node
 EXPOSE 4111
 
-CMD ["node", "--import=./.mastra/output/instrumentation.mjs", ".mastra/output/index.mjs"]
+CMD ["node", ".mastra/output/index.mjs"]
