@@ -20,6 +20,8 @@ export const ONTOLOGY = {
     "FieldSource", // 182 nodes
     "MarketSegment", // 11 nodes
     "PendingReview", // Admin review queue for low-confidence data
+    "ActivitySession", // Tracks a single Gardener work session
+    "PropertyChange", // Audit log entry for a single property modification
   ],
 
   relationships: [
@@ -187,6 +189,28 @@ export const ONTOLOGY = {
       startLabel: "PendingReview",
       endLabel: "OutdoorBrand",
     },
+
+    // Audit trail relationships
+    {
+      type: "CHANGED",
+      startLabel: "ActivitySession",
+      endLabel: "PropertyChange",
+    },
+    {
+      type: "CHANGED_ON",
+      startLabel: "PropertyChange",
+      endLabel: "GearItem",
+    },
+    {
+      type: "CHANGED_ON",
+      startLabel: "PropertyChange",
+      endLabel: "OutdoorBrand",
+    },
+    {
+      type: "CREATED_REVIEW",
+      startLabel: "ActivitySession",
+      endLabel: "PendingReview",
+    },
   ],
 
   requiredProperties: {
@@ -194,6 +218,8 @@ export const ONTOLOGY = {
     OutdoorBrand: ["name"],
     ProductFamily: ["name"],
     PendingReview: ["type", "status", "confidence", "reason"],
+    ActivitySession: ["sessionId", "type", "status", "startedAt"],
+    PropertyChange: ["changeId", "property", "oldValue", "newValue", "confidence", "createdAt"],
   } as Record<string, string[]>,
 
   uniqueConstraints: {
@@ -224,7 +250,11 @@ Key filling factor observations from the live schema:
 - OutdoorBrand.country: 20% filled (target: >80%)
 - OutdoorBrand.yearFounded: 15% filled (target: >60%)
 
-PendingReview: Items awaiting admin review. Status: pending/approved/rejected. Created by Gardener when confidence < 50%. Linked to target node via PENDING_FOR relationship.`,
+PendingReview: Items awaiting admin review. Status: pending/approved/rejected. Created by Gardener when confidence < 50%. Linked to target node via PENDING_FOR relationship.
+
+ActivitySession: Tracks a single Gardener work session (video import, enrichment run, audit). Status: running/completed/failed. Every write operation must be linked to a session.
+
+PropertyChange: Audit log entry for a single property modification. Links to the target node via CHANGED_ON and to the session via CHANGED. Stores oldValue, newValue, confidence, sources, and reasoning for full provenance.`,
 };
 
 export type OntologyType = typeof ONTOLOGY;

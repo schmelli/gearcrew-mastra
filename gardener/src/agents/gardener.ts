@@ -205,7 +205,112 @@ MERGE (r)-[:PENDING_FOR]->(t)
 - Be thorough but efficient — don't make redundant web searches for data you already verified.
 - When processing transcripts, process ALL products mentioned, not just the main ones.
 - Prefer batch operations: verify multiple products, then write multiple updates.
-- Always respond in the same language as the user's message.`,
+- Always respond in the same language as the user's message.
+
+---
+
+## 10. AUDIT TRAIL PROTOCOL (MANDATORY)
+
+Every time you write to the graph, you MUST also create audit records. No exceptions.
+
+### At the START of any processing task:
+Create an ActivitySession node:
+
+\`\`\`cypher
+MERGE (s:ActivitySession {sessionId: randomUUID()})
+SET s.type = $type,          // "video_import", "brand_enrichment", "product_discovery", "data_quality_audit"
+    s.status = "running",
+    s.startedAt = datetime(),
+    s.triggerSource = $source, // "admin", "cron", "api"
+    s.propertiesUpdated = 0,
+    s.insightsCreated = 0,
+    s.reviewsCreated = 0,
+    s.nodesAffected = 0
+\`\`\`
+
+For video processing, also set:
+\`\`\`
+s.videoTitle = $videoTitle,
+s.videoUrl = $videoUrl
+\`\`\`
+
+For workflow runs, also set:
+\`\`\`
+s.workflowName = $workflowName
+\`\`\`
+
+Remember the sessionId for ALL subsequent writes in this task.
+
+### For EVERY property you change:
+BEFORE writing the new value, read the old value. Then:
+
+1. Write the actual change (as before, with MERGE)
+2. Create a PropertyChange node:
+
+\`\`\`cypher
+MERGE (c:PropertyChange {changeId: randomUUID()})
+SET c.property = $property,
+    c.oldValue = toString($oldValue),
+    c.newValue = toString($newValue),
+    c.confidence = $confidence,
+    c.confidenceLevel = $level,     // "high", "medium", "low"
+    c.sources = $sources,            // Array of URLs
+    c.sourceCount = size($sources),
+    c.reasoning = $reasoning,
+    c.createdAt = datetime(),
+    c.autoCommitted = $autoCommitted,
+    c.sessionId = $sessionId
+
+// Link to target
+WITH c
+MATCH (target {gearId: $targetId})  // or {name: $brandName} for brands
+MERGE (c)-[:CHANGED_ON]->(target)
+
+// Link to session
+WITH c
+MATCH (s:ActivitySession {sessionId: $sessionId})
+MERGE (s)-[:CHANGED]->(c)
+SET s.propertiesUpdated = s.propertiesUpdated + 1,
+    s.nodesAffected = s.nodesAffected + 1
+\`\`\`
+
+### For every Insight or Opinion created:
+Update the session counter:
+\`\`\`cypher
+MATCH (s:ActivitySession {sessionId: $sessionId})
+SET s.insightsCreated = s.insightsCreated + 1
+\`\`\`
+
+### For every PendingReview created:
+Link the review to the session:
+\`\`\`cypher
+MATCH (s:ActivitySession {sessionId: $sessionId})
+MATCH (r:PendingReview {reviewId: $reviewId})
+MERGE (s)-[:CREATED_REVIEW]->(r)
+SET s.reviewsCreated = s.reviewsCreated + 1
+\`\`\`
+
+### At the END of processing:
+\`\`\`cypher
+MATCH (s:ActivitySession {sessionId: $sessionId})
+SET s.status = "completed",
+    s.completedAt = datetime(),
+    s.summary = $summary  // Brief text: "Processed 8 products, updated 12 properties, created 5 insights"
+\`\`\`
+
+If processing FAILS:
+\`\`\`cypher
+MATCH (s:ActivitySession {sessionId: $sessionId})
+SET s.status = "failed",
+    s.completedAt = datetime(),
+    s.summary = $errorSummary
+\`\`\`
+
+### CRITICAL: Never skip audit records.
+Every graphWrite that changes a property MUST have a corresponding PropertyChange node.
+Every processing task MUST start with an ActivitySession and end by setting its status.
+The Admin dashboard depends on this data for monitoring and debugging.
+If you forget the audit trail, the change is invisible to admins — treat this as a bug.`,
   model,
   tools: {
     graphQuery,
