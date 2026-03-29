@@ -19,6 +19,7 @@ export const ONTOLOGY = {
     "PricePoint", // 39 nodes
     "FieldSource", // 182 nodes
     "MarketSegment", // 11 nodes
+    "PendingReview", // Admin review queue for low-confidence data
   ],
 
   relationships: [
@@ -174,12 +175,25 @@ export const ONTOLOGY = {
       startLabel: "ProductFamily",
       endLabel: "OutdoorBrand",
     },
+
+    // PendingReview relationships
+    {
+      type: "PENDING_FOR",
+      startLabel: "PendingReview",
+      endLabel: "GearItem",
+    },
+    {
+      type: "PENDING_FOR",
+      startLabel: "PendingReview",
+      endLabel: "OutdoorBrand",
+    },
   ],
 
   requiredProperties: {
     GearItem: ["name", "brand"],
     OutdoorBrand: ["name"],
     ProductFamily: ["name"],
+    PendingReview: ["type", "status", "confidence", "reason"],
   } as Record<string, string[]>,
 
   uniqueConstraints: {
@@ -208,7 +222,9 @@ Key filling factor observations from the live schema:
 - OutdoorBrand.description: 20% filled (target: >80%)
 - OutdoorBrand.website: 17% filled (target: >90%)
 - OutdoorBrand.country: 20% filled (target: >80%)
-- OutdoorBrand.yearFounded: 15% filled (target: >60%)`,
+- OutdoorBrand.yearFounded: 15% filled (target: >60%)
+
+PendingReview: Items awaiting admin review. Status: pending/approved/rejected. Created by Gardener when confidence < 50%. Linked to target node via PENDING_FOR relationship.`,
 };
 
 export type OntologyType = typeof ONTOLOGY;
