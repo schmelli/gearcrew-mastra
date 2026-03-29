@@ -54,7 +54,7 @@ const runQualityQueries = createStep({
     const fallback = { issues: [] as Array<z.infer<typeof issueSchema>>, totalIssues: 0 };
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     let result;
     try {
@@ -163,7 +163,7 @@ const fixIssues = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const topIssues = scored.fixableIssues.slice(0, maxFixes ?? 50);
     const issueList = topIssues

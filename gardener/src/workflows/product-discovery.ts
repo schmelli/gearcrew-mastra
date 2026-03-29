@@ -64,7 +64,7 @@ const getExistingProducts = createStep({
     };
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     let result;
     try {
@@ -110,7 +110,7 @@ const scrapeProductCatalog = createStep({
     };
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const existingNames = existing.existingProducts.map((p) => p.name).join(", ");
 
@@ -186,7 +186,7 @@ const researchAndWriteNew = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const batchSize = 5;
     let totalAdded = 0;
@@ -260,7 +260,7 @@ const verifyProductCount = createStep({
     const { productCount: before } = getStepResult(getExistingProducts);
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     let result;
     try {

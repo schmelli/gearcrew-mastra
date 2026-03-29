@@ -44,7 +44,7 @@ const findCompetitors = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const fallback = { candidates: [] as Array<z.infer<typeof candidateSchema>>, skipped: false };
 
@@ -108,7 +108,7 @@ const findPairings = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const fallback = { candidates: [] as Array<z.infer<typeof candidateSchema>>, skipped: false };
 
@@ -176,7 +176,7 @@ const findFamilyAlternatives = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const fallback = { candidates: [] as Array<z.infer<typeof candidateSchema>>, skipped: false };
 
@@ -235,7 +235,7 @@ const validateAndWriteRelationships = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const candidateList = allCandidates
       .map((c) => `- (${c.sourceGearId})-[:${c.relationshipType}]->(${c.targetGearId}) [${c.confidence}]`)

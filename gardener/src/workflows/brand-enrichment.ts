@@ -63,7 +63,7 @@ const assessBrand = createStep({
     };
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     let result;
     try {
@@ -121,7 +121,7 @@ const researchGaps = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     let research;
     try {
@@ -158,7 +158,7 @@ const validateAndWrite = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     const sanitizedData = research.data ? sanitizeWebContent(research.data) : "";
 
@@ -210,7 +210,7 @@ const verifyImprovement = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
+    const agent = mastra.getAgent("gardener");
 
     let after;
     try {
