@@ -11,11 +11,10 @@ import {
 import { formatErrorMapForPrompt } from "../lib/transcript-error-map.js";
 
 // Gemini 3 Flash via Vercel AI Gateway
-// Gemini 2.5 Flash — stable tool calling without thought_signature requirement
-// Note: Gemini 3 Flash requires thought_signatures which Mastra doesn't support yet
+// Mastra 1.17+ supports thought_signatures required by Gemini 3
 const model = {
   url: process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1",
-  id: "google/gemini-2.5-flash" as const,
+  id: "google/gemini-3-flash" as const,
   apiKey: process.env.AI_GATEWAY_API_KEY ?? "",
 };
 
@@ -23,10 +22,8 @@ const model = {
 const TRANSCRIPT_ERRORS_SECTION = formatErrorMapForPrompt();
 
 export const gardener = new Agent({
+  id: "gardener",
   name: "Gardener",
-  defaultVNextStreamOptions: {
-    maxSteps: 20,
-  },
   instructions: `## 1. Identity & Mission
 
 You are the **Gardener** of the GearGraph — the intelligent caretaker of a knowledge graph
