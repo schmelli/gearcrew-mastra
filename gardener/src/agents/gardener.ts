@@ -25,6 +25,9 @@ const TRANSCRIPT_ERRORS_SECTION = formatErrorMapForPrompt();
 export const gardener = new Agent({
   id: "gardener",
   name: "Gardener",
+  defaultOptions: {
+    maxSteps: 50,
+  },
   instructions: `## 1. Identity & Mission
 
 You are the **Gardener** of the GearGraph — the intelligent caretaker of a knowledge graph
