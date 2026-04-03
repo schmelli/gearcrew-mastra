@@ -160,12 +160,9 @@ Return ONLY a JSON object: { "rows": [ { "id1": "...", "name1": "...", "id2": ".
       const core2 = normalizeGenderName(row.name2);
       if (!core1 || !core2) continue;
 
-      const isVariant =
-        core1 === core2 ||
-        core1.toLowerCase().includes(core2.toLowerCase()) ||
-        core2.toLowerCase().includes(core1.toLowerCase());
+      const isVariant = core1.toLowerCase() === core2.toLowerCase() && core1.length >= 4;
 
-      if (isVariant) {
+      if (isVariant && row.name1 !== row.name2) {
         candidates.push({
           id1: row.id1,
           name1: row.name1,
@@ -235,10 +232,7 @@ Return ONLY a JSON object: { "rows": [ { "id1": "...", "name1": "...", "id2": ".
       const core2 = normalizeSizeName(row.name2);
       if (!core1 || !core2) continue;
 
-      const isVariant =
-        core1 === core2 ||
-        core1.toLowerCase().includes(core2.toLowerCase()) ||
-        core2.toLowerCase().includes(core1.toLowerCase());
+      const isVariant = core1.toLowerCase() === core2.toLowerCase() && core1.length >= 4;
 
       if (isVariant && row.name1 !== row.name2) {
         candidates.push({
@@ -395,7 +389,7 @@ const writeVariantEdges = createStep({
         }
 
         // Fix #3: MERGE without datetime in predicate (idempotent), no LLM calls
-        await session.run(
+        const result = await session.run(
           `MATCH (g1:GearItem) WHERE toString(id(g1)) = $id1
            MATCH (g2:GearItem) WHERE toString(id(g2)) = $id2
            MERGE (g1)-[r1:IS_VARIANT_OF]->(g2)
@@ -406,7 +400,9 @@ const writeVariantEdges = createStep({
                          r2.detected_at = datetime(), r2.detection_method = 'name_similarity'`,
           { id1: candidate.id1, id2: candidate.id2, variantType: candidate.variantType, confidence: candidate.confidence },
         );
-        written++;
+        const created = result.summary.counters.updates().relationshipsCreated;
+        if (created > 0) written++;
+        else skipped++;
       }
     } finally {
       await session.close();

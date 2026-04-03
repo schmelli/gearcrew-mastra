@@ -6,7 +6,7 @@ import { closeDriver } from "../lib/memgraph.js";
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
-  agents: { gardener },
+  agents: { Gardener: gardener },
   workflows: { variantDetection },
   server: {
     port,
