@@ -126,7 +126,7 @@ export function crossReferenceWeights(
 
 const triggerSchema = z.object({
   dryRun: z.boolean().default(false),
-  batchSize: z.number().default(50),
+  batchSize: z.number().int().positive().default(50),
   targetConfidence: z.enum(["low", "medium", "any"]).default("any"),
 });
 
@@ -327,7 +327,7 @@ async function serperSearchWeights(
       }
       for (const r of data.organic ?? []) {
         if (r.snippet) {
-          snippets.push({ text: r.snippet, url: r.link ?? "" });
+          snippets.push({ text: r.snippet, url: r.link ?? "serper:organic:unknown" });
         }
       }
 
@@ -508,11 +508,12 @@ const writeVerifiedWeightsStep = createStep({
 
     // Critical #4: use shared getWriteSession() — removes hardcoded password
     let written = 0;
+    let skipped = 0;
     const session = getWriteSession();
     try {
       for (const r of toWrite) {
         const source = r.agreingSources.join(", ");
-        await session.run(
+        const result = await session.run(
           `MATCH (g:GearItem) WHERE toString(id(g)) = $id
            SET g.weight_grams = $weight,
                g.weightConfidence = $confidence,
@@ -525,10 +526,14 @@ const writeVerifiedWeightsStep = createStep({
             source,
           },
         );
-        written++;
-        console.log(
-          `[write] ${r.name}: ${r.oldWeight}g/${r.oldConfidence} -> ${r.newWeight}g/${r.newConfidence}`,
-        );
+        const propsSet = result.summary.counters.updates().propertiesSet;
+        if (propsSet === 0) {
+          console.warn(`[write-verified-weights] No node matched for id=${r.id} (${r.name}) — skipped`);
+          skipped++;
+        } else {
+          written++;
+          console.log(`[write-verified-weights] Wrote ${r.id} (${r.name}): ${r.newWeight}g → ${r.newConfidence}`);
+        }
       }
     } finally {
       await session.close();
