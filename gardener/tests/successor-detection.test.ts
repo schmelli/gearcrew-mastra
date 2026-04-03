@@ -21,6 +21,8 @@ describe("detectVersionSignal", () => {
     expect(detectVersionSignal("Sea to Summit Ether Lite v3")).toBe("version"));
   it("detects 3rd Gen", () =>
     expect(detectVersionSignal("Therm-a-Rest NeoAir XTherm 3rd Gen")).toBe("generation"));
+  it("detects year 2031 (future-proof regex)", () =>
+    expect(detectVersionSignal("MSR WhisperLite 2031")).toBe("year"));
 });
 
 describe("extractSuccessorFromSnippets", () => {
@@ -81,5 +83,20 @@ describe("extractSuccessorFromSnippets", () => {
 
   it("handles empty snippets array", () => {
     expect(extractSuccessorFromSnippets([], "Product A", "Product B")).toBe("none");
+  });
+
+  // Important #6: test for "replaced by [name]" logic - named product after "replaced by" is NEWER
+  it("correctly identifies newer product in 'replaced by X' pattern", () => {
+    const snippets = ["It has been replaced by Nemo Tensor V2"];
+    // "Nemo Tensor V2" is mentioned after "replaced by" -> V2 is NEWER
+    expect(extractSuccessorFromSnippets(snippets, "Nemo Tensor V2", "Nemo Tensor"))
+      .toBe("1_supersedes_2"); // name1 (V2) supersedes name2
+  });
+
+  it("correctly identifies older product in 'replaced by X' pattern when older is named", () => {
+    const snippets = ["The Nemo Tensor has been replaced by its successor"];
+    // "Nemo Tensor" appears before "replaced by" -> Tensor is the OLDER product
+    expect(extractSuccessorFromSnippets(snippets, "Nemo Tensor V2", "Nemo Tensor"))
+      .toBe("1_supersedes_2"); // name1 (V2) is the implied newer product
   });
 });

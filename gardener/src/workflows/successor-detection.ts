@@ -4,6 +4,18 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getReadSession, getWriteSession } from "../lib/memgraph.js";
 import { sanitizeWebContent } from "../lib/utils.js";
 
+// Minor #7: Anthropic client as lazy module-level singleton (avoids throwing
+// during test module loading when ANTHROPIC_API_KEY is not set in the test env).
+let _anthropic: Anthropic | null = null;
+function getAnthropicClient(): Anthropic {
+  if (!_anthropic) {
+    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+    if (!ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is required");
+    _anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+  }
+  return _anthropic;
+}
+
 // ─── Helper functions (exported for tests) ────────────────────────────────────
 
 /**
@@ -11,7 +23,7 @@ import { sanitizeWebContent } from "../lib/utils.js";
  * Returns "year", "version", "generation", or null.
  */
 export function detectVersionSignal(name: string): "year" | "version" | "generation" | null {
-  if (/20[12]\d/.test(name)) return "year";
+  if (/20\d{2}/.test(name)) return "year"; // Minor #9: future-proof year regex
   if (/\bv[2-9]\b/i.test(name)) return "version";
   if (/\b(Gen\s*[0-9]|[2-9]nd\s*Gen|[2-9]rd\s*Gen|[2-9]th\s*Gen|II|III|IV|VI|VII|VIII)\b/.test(name))
     return "generation";
@@ -52,11 +64,56 @@ export function extractSuccessorFromSnippets(
 
     if (!mentionsN1 && !mentionsN2) continue;
 
+    // Important #6: "replaced by" handling takes priority over positive keyword patterns.
+    // "replaced by X" means X is the NEWER product.
+    // Process this BEFORE the generic positive-keyword block to avoid mis-classifying
+    // snippets that contain both "replaced by" and "successor".
+    if (snippet.includes("replaced by")) {
+      const replacedByIdx = snippet.indexOf("replaced by");
+
+      if (mentionsN1 && mentionsN2) {
+        const n1Idx = snippet.indexOf(n1.slice(0, 15));
+        const n2Idx = snippet.indexOf(n2.slice(0, 15));
+
+        // When n1 is a prefix of n2 (or vice versa) they land at the same index.
+        // Use the LONGER match as the more specific one.
+        if (n1Idx === n2Idx) {
+          // n1 is longer (e.g. "Nemo Tensor V2") and n2 is a prefix (e.g. "Nemo Tensor").
+          // Check whether the FULL n1 appears after "replaced by".
+          const n1Full = snippet.indexOf(n1); // full 20-char slice
+          if (n1Full > replacedByIdx) {
+            return "1_supersedes_2"; // n1 named after "replaced by" -> n1 is newer
+          }
+          return "2_supersedes_1"; // the shared prefix appears before "replaced by" -> n2 (prefix) is older
+        }
+
+        if (n1Idx > replacedByIdx && n2Idx < replacedByIdx) {
+          return "1_supersedes_2"; // n1 appears after "replaced by" -> n1 is newer
+        }
+        if (n2Idx > replacedByIdx && n1Idx < replacedByIdx) {
+          return "2_supersedes_1"; // n2 appears after "replaced by" -> n2 is newer
+        }
+        // Both on the same side; fall through
+      } else if (mentionsN1 && !mentionsN2) {
+        const n1Idx = snippet.indexOf(n1.slice(0, 15));
+        if (n1Idx > replacedByIdx) {
+          return "1_supersedes_2"; // n1 is after "replaced by" -> n1 is newer
+        }
+        return "2_supersedes_1"; // n1 is before "replaced by" -> n1 is older, n2 implied newer
+      } else if (mentionsN2 && !mentionsN1) {
+        const n2Idx = snippet.indexOf(n2.slice(0, 15));
+        if (n2Idx > replacedByIdx) {
+          return "2_supersedes_1"; // n2 is after "replaced by" -> n2 is newer
+        }
+        return "1_supersedes_2"; // n2 is before "replaced by" -> n2 is older, n1 implied newer
+      }
+    }
+
     const kwIdx = SUCCESSOR_KEYWORDS.map((kw) => snippet.indexOf(kw))
       .filter((i) => i !== -1)
       .sort((a, b) => a - b)[0] ?? Infinity;
 
-    // Pattern: "name1 replaces/supersedes/…" → name1 is the newer one
+    // Pattern: "name1 replaces/supersedes/..." -> name1 is the newer one
     if (mentionsN1) {
       const posKeywords = ["replaces", "supersedes", "successor", "updated version", "next generation", "upgrade from"];
       const hasPosKeyword = posKeywords.some((kw) => snippet.includes(kw));
@@ -68,7 +125,7 @@ export function extractSuccessorFromSnippets(
       }
     }
 
-    // Pattern: "name2 replaces/supersedes/…" → name2 is the newer one
+    // Pattern: "name2 replaces/supersedes/..." -> name2 is the newer one
     if (mentionsN2) {
       const posKeywords = ["replaces", "supersedes", "successor", "updated version", "next generation", "upgrade from"];
       const hasPosKeyword = posKeywords.some((kw) => snippet.includes(kw));
@@ -80,22 +137,17 @@ export function extractSuccessorFromSnippets(
       }
     }
 
-    // Pattern: "nameX discontinued / replaced by …" → nameX is the OLDER product
-    // If n1 is discontinued → n2 is newer → "2_supersedes_1"
-    // If n2 is discontinued → n1 is newer → "1_supersedes_2"
-    if (snippet.includes("discontinued") || snippet.includes("replaced by")) {
-      if (mentionsN1 && mentionsN2) {
+    // Pattern: "nameX discontinued" -> nameX is the OLDER product
+    if (snippet.includes("discontinued")) {
+      if (mentionsN2 && !mentionsN1) {
+        return "1_supersedes_2"; // n2 is discontinued (older)
+      } else if (mentionsN1 && !mentionsN2) {
+        return "2_supersedes_1"; // n1 is discontinued (older)
+      } else if (mentionsN1 && mentionsN2) {
         const n1Idx = snippet.indexOf(n1.slice(0, 15));
         const n2Idx = snippet.indexOf(n2.slice(0, 15));
-        // The name appearing BEFORE "discontinued/replaced by" is the older one
         if (n1Idx < n2Idx) return "2_supersedes_1";
         if (n2Idx < n1Idx) return "1_supersedes_2";
-      } else if (mentionsN2 && !mentionsN1) {
-        // n2 is discontinued (older), n1 is the implied successor
-        return "1_supersedes_2";
-      } else if (mentionsN1 && !mentionsN2) {
-        // n1 is discontinued (older), n2 is the implied successor
-        return "2_supersedes_1";
       }
     }
 
@@ -226,8 +278,9 @@ async function verifyPairViaSerper(
   }
 
   const organic = data.organic ?? [];
+  // Important #5: sanitize both snippet and title before pattern matching
   const snippets = organic.map(
-    (r) => `${sanitizeWebContent(r.snippet ?? "")} ${r.title ?? ""}`,
+    (r) => `${sanitizeWebContent(r.snippet ?? "")} ${sanitizeWebContent(r.title ?? "")}`,
   );
   const sourceUrl = organic[0]?.link ?? "";
   const relation = extractSuccessorFromSnippets(snippets, name1, name2);
@@ -250,7 +303,8 @@ async function arbitrateViaHaiku(
   relation: "1_supersedes_2" | "2_supersedes_1" | "none";
   confidence: "high" | "medium" | "low";
 }> {
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // Minor #7: uses lazy module-level singleton
+  const anthropic = getAnthropicClient();
   const contextText = snippets
     .slice(0, 3)
     .map((s) => s.slice(0, 300))
@@ -280,15 +334,26 @@ Reply ONLY with valid JSON: {"relation": "A_supersedes_B" | "B_supersedes_A" | "
     if (!jsonMatch) return { relation: "none", confidence: "low" };
 
     const parsed = JSON.parse(jsonMatch[0]) as {
-      relation: "A_supersedes_B" | "B_supersedes_A" | "none";
-      confidence: "high" | "medium" | "low";
+      relation: string;
+      confidence: string;
     };
 
-    let relation: "1_supersedes_2" | "2_supersedes_1" | "none" = "none";
-    if (parsed.relation === "A_supersedes_B") relation = "1_supersedes_2";
-    else if (parsed.relation === "B_supersedes_A") relation = "2_supersedes_1";
+    // Important #4: Runtime validation of enum values
+    const VALID_CONFIDENCE = ["high", "medium", "low"] as const;
+    const VALID_RELATIONS = ["A_supersedes_B", "B_supersedes_A", "none"] as const;
 
-    return { relation, confidence: parsed.confidence ?? "low" };
+    const confidence = VALID_CONFIDENCE.includes(parsed.confidence as any)
+      ? parsed.confidence as "high" | "medium" | "low"
+      : "low";
+    const rawRelation = VALID_RELATIONS.includes(parsed.relation as any)
+      ? parsed.relation as typeof VALID_RELATIONS[number]
+      : "none";
+
+    let relation: "1_supersedes_2" | "2_supersedes_1" | "none" = "none";
+    if (rawRelation === "A_supersedes_B") relation = "1_supersedes_2";
+    else if (rawRelation === "B_supersedes_A") relation = "2_supersedes_1";
+
+    return { relation, confidence };
   } catch {
     return { relation: "none", confidence: "low" };
   }
@@ -306,6 +371,7 @@ const fetchVersionCandidates = createStep({
     const session = getReadSession();
 
     try {
+      // Critical #2: filter pairs where SUPERSEDES/SUPERSEDED_BY edges already exist
       const result = await session.run(
         `MATCH (g:GearItem)-[:PRODUCED_BY]->(b:OutdoorBrand)
 WHERE g.name =~ '.*(20[12][0-9]|\\bv[2-9]\\b|\\bV[2-9]\\b|Gen [0-9]|\\bII\\b|\\bIII\\b|2nd Gen|3rd Gen).*'
@@ -315,6 +381,10 @@ UNWIND items as g1
 UNWIND items as g2
 WITH g1, g2, brand
 WHERE id(g1) < id(g2)
+  AND NOT (g1)-[:SUPERSEDES]->(g2)
+  AND NOT (g2)-[:SUPERSEDES]->(g1)
+  AND NOT (g1)-[:SUPERSEDED_BY]->(g2)
+  AND NOT (g2)-[:SUPERSEDED_BY]->(g1)
 RETURN toString(id(g1)) as id1, g1.name as name1,
        toString(id(g2)) as id2, g2.name as name2, brand
 LIMIT $batchSize`,
@@ -406,9 +476,11 @@ const verifyViaSerperStep = createStep({
     console.log(`[verify-via-serper] Checking ${allPairs.length} unique pairs`);
 
     const verified: z.infer<typeof verifiedPairSchema>[] = [];
-    for (const pair of allPairs) {
-      await new Promise((r) => setTimeout(r, 300)); // 300ms rate limit
+    for (let i = 0; i < allPairs.length; i++) {
+      // Minor #8: skip rate-limit sleep on first call
+      if (i > 0) await new Promise((r) => setTimeout(r, 300));
 
+      const pair = allPairs[i];
       const result = await verifyPairViaSerper(pair.name1, pair.name2, pair.brand);
       verified.push({ ...pair, ...result });
     }
@@ -500,7 +572,7 @@ const writeSuccessorEdges = createStep({
     const supersessionFound = resolved.filter((r) => r.relation !== "none").length;
 
     if (dryRun) {
-      console.log(`[write-successor-edges] DRY RUN — would write ${actionable.length} edge pairs`);
+      console.log(`[write-successor-edges] DRY RUN - would write ${actionable.length} edge pairs`);
       for (const r of actionable) {
         const [newerName, olderName] =
           r.relation === "1_supersedes_2"
@@ -521,26 +593,39 @@ const writeSuccessorEdges = createStep({
           r.relation === "1_supersedes_2" ? [r.id1, r.id2] : [r.id2, r.id1];
 
         try {
-          await session.run(
+          // Critical #1: MERGE without mutable properties to prevent duplicates on re-run.
+          // Use ON CREATE SET for immutable fields, ON MATCH SET for updatable fields.
+          const result = await session.run(
             `MATCH (g1:GearItem) WHERE toString(id(g1)) = $newerId
 MATCH (g2:GearItem) WHERE toString(id(g2)) = $olderId
-MERGE (g1)-[:SUPERSEDES {
-  confidence: $confidence,
-  source_url: $sourceUrl,
-  detected_at: datetime(),
-  detection_method: $method
-}]->(g2)
-MERGE (g2)-[:SUPERSEDED_BY {
-  confidence: $confidence,
-  source_url: $sourceUrl,
-  detected_at: datetime(),
-  detection_method: $method
-}]->(g1)`,
+MERGE (g1)-[r1:SUPERSEDES]->(g2)
+ON CREATE SET r1.confidence = $confidence,
+              r1.source_url = $sourceUrl,
+              r1.detected_at = datetime(),
+              r1.detection_method = $method
+ON MATCH SET  r1.confidence = $confidence,
+              r1.source_url = $sourceUrl,
+              r1.detection_method = $method
+MERGE (g2)-[r2:SUPERSEDED_BY]->(g1)
+ON CREATE SET r2.confidence = $confidence,
+              r2.source_url = $sourceUrl,
+              r2.detected_at = datetime(),
+              r2.detection_method = $method
+ON MATCH SET  r2.confidence = $confidence,
+              r2.source_url = $sourceUrl,
+              r2.detection_method = $method`,
             { newerId, olderId, confidence: r.confidence, sourceUrl: r.sourceUrl, method: r.method },
           );
-          written++;
+          // Critical #3: only increment written if nodes were actually found/matched
+          const created = result.summary.counters.updates().relationshipsCreated;
+          if (created > 0) {
+            written++;
+          } else {
+            skipped++;
+            console.warn(`[write-successor-edges] No nodes found for pair ${newerId} -> ${olderId}`);
+          }
         } catch (err) {
-          console.error(`[write-successor-edges] Failed ${newerId}→${olderId}:`, err);
+          console.error(`[write-successor-edges] Failed ${newerId}->${olderId}:`, err);
           skipped++;
         }
       }
