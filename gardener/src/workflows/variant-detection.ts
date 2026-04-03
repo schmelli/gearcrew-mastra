@@ -1,5 +1,6 @@
 import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
+import { getWriteSession } from "../lib/memgraph.js";
 
 // ---------------------------------------------------------------------------
 // Helper functions (exported for unit tests)
@@ -19,9 +20,15 @@ export function normalizeSizeName(name: string): string {
     .trim();
 }
 
+// Fix #2: proper regex - longer Roman numerals first, separate replace for trailing numbers
 export function normalizeGenerationName(name: string): string {
   return name
-    .replace(/\b(20[12][0-9]|v\d|V\d|Gen\s?\d|II|III|IV|2nd|3rd|4th|\s[23]\s?$)/gi, "")
+    .replace(/\b20\d{2}\b/g, "")                         // years: 2010-2099
+    .replace(/\bv\d+\b/gi, "")                            // v2, V3, etc.
+    .replace(/\bGen\.?\s?\d+\b/gi, "")                    // Gen 2, Gen. 2
+    .replace(/\b(2nd|3rd|4th|5th)\s+Gen\b/gi, "")        // 2nd Gen
+    .replace(/\b(II|III|IV|VI|VII|VIII|IX)\b/g, "")       // Roman numerals II-IX (longer before shorter)
+    .replace(/\s+[23]\s*$/g, "")                          // trailing " 2", " 3"
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -55,6 +62,7 @@ const detectionOutputSchema = z.object({
 
 // ---------------------------------------------------------------------------
 // Utility: parse rows from agent response text
+// Fix #6: non-greedy JSON matching to avoid consuming too much text
 // ---------------------------------------------------------------------------
 
 function parseAgentRows(
@@ -62,10 +70,28 @@ function parseAgentRows(
 ): Array<{ id1: string; name1: string; id2: string; name2: string; brand: string }> {
   const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
   const cleaned = fenceMatch ? fenceMatch[1].trim() : text;
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return [];
+  // Try all JSON object matches, take the first one with a "rows" array
+  const jsonPattern = /\{[\s\S]*?\}/g;
+  let match;
+  while ((match = jsonPattern.exec(cleaned)) !== null) {
+    try {
+      const parsed = JSON.parse(match[0]) as { rows?: unknown[] };
+      if (Array.isArray(parsed.rows)) {
+        return parsed.rows as Array<{
+          id1: string;
+          name1: string;
+          id2: string;
+          name2: string;
+          brand: string;
+        }>;
+      }
+    } catch {
+      // try next match
+    }
+  }
+  // Fallback: try entire cleaned string as JSON
   try {
-    const parsed = JSON.parse(jsonMatch[0]) as { rows?: unknown[] };
+    const parsed = JSON.parse(cleaned) as { rows?: unknown[] };
     if (Array.isArray(parsed.rows)) {
       return parsed.rows as Array<{
         id1: string;
@@ -233,6 +259,7 @@ Return ONLY a JSON object: { "rows": [ { "id1": "...", "name1": "...", "id2": ".
 
 // ---------------------------------------------------------------------------
 // Step 3: detect-generation-variants
+// Fix #4/#7: strict equality in post-filter (no substring matching)
 // ---------------------------------------------------------------------------
 
 const detectGenerationVariants = createStep({
@@ -283,12 +310,8 @@ Return ONLY a JSON object: { "rows": [ { "id1": "...", "name1": "...", "id2": ".
       const core2 = normalizeGenerationName(row.name2);
       if (!core1 || !core2) continue;
 
-      const isVariant =
-        core1 === core2 ||
-        core1.toLowerCase().includes(core2.toLowerCase()) ||
-        core2.toLowerCase().includes(core1.toLowerCase());
-
-      if (isVariant && row.name1 !== row.name2) {
+      // Fix #4/#7: strict equality only - avoids false positives from substring matching
+      if (core1 === core2 && core1.length >= 4 && row.name1 !== row.name2) {
         candidates.push({
           id1: row.id1,
           name1: row.name1,
@@ -307,6 +330,8 @@ Return ONLY a JSON object: { "rows": [ { "id1": "...", "name1": "...", "id2": ".
 
 // ---------------------------------------------------------------------------
 // Step 4: write-variant-edges
+// Fix #3: direct Cypher driver instead of per-candidate LLM calls
+// Fix #5: ID validation before Cypher
 // ---------------------------------------------------------------------------
 
 const writeVariantEdgesOutputSchema = z.object({
@@ -315,12 +340,14 @@ const writeVariantEdgesOutputSchema = z.object({
   candidates: z.array(variantCandidateSchema),
 });
 
+const isValidId = (id: string): boolean => /^\d+$/.test(id);
+
 const writeVariantEdges = createStep({
   id: "write-variant-edges",
   description: "Write IS_VARIANT_OF edges for detected variant pairs (skipped in dryRun)",
   inputSchema: detectionOutputSchema,
   outputSchema: writeVariantEdgesOutputSchema,
-  execute: async ({ inputData, mastra, getInitData, getStepResult }) => {
+  execute: async ({ inputData, getInitData, getStepResult }) => {
     const trigger = getInitData<typeof variantDetection>();
 
     const genderResult = getStepResult<z.infer<typeof detectionOutputSchema>>("detect-gender-variants");
@@ -342,44 +369,47 @@ const writeVariantEdges = createStep({
       return { written: 0, skipped: 0, candidates: [] };
     }
 
-    if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("Gardener");
-
     let written = 0;
     let skipped = 0;
+    const session = getWriteSession();
+    try {
+      for (const candidate of allCandidates) {
+        // Fix #5: validate IDs are pure integers before Cypher
+        if (!isValidId(candidate.id1) || !isValidId(candidate.id2)) {
+          console.warn(`[write-variant-edges] Skipping candidate with invalid IDs: ${candidate.id1}, ${candidate.id2}`);
+          skipped++;
+          continue;
+        }
 
-    for (const candidate of allCandidates) {
-      try {
-        await agent.generate(
-          `Run the following graphWrite query to create bidirectional IS_VARIANT_OF edges.
+        // Check if edge already exists
+        const check = await session.run(
+          `MATCH (g1:GearItem) WHERE toString(id(g1)) = $id1
+           MATCH (g2:GearItem) WHERE toString(id(g2)) = $id2
+           OPTIONAL MATCH (g1)-[r:IS_VARIANT_OF]->(g2)
+           RETURN r IS NOT NULL as exists`,
+          { id1: candidate.id1, id2: candidate.id2 },
+        );
+        if (check.records[0]?.get("exists")) {
+          skipped++;
+          continue;
+        }
 
-Query (use these literal values directly in the query — do NOT use parameters):
-MATCH (g1:GearItem) WHERE toString(id(g1)) = '${candidate.id1}'
-MATCH (g2:GearItem) WHERE toString(id(g2)) = '${candidate.id2}'
-OPTIONAL MATCH (g1)-[existing:IS_VARIANT_OF]->(g2)
-WITH g1, g2, existing
-WHERE existing IS NULL
-MERGE (g1)-[:IS_VARIANT_OF {
-  variant_type: '${candidate.variantType}',
-  confidence: '${candidate.confidence}',
-  detected_at: datetime(),
-  detection_method: 'name_similarity'
-}]->(g2)
-MERGE (g2)-[:IS_VARIANT_OF {
-  variant_type: '${candidate.variantType}',
-  confidence: '${candidate.confidence}',
-  detected_at: datetime(),
-  detection_method: 'name_similarity'
-}]->(g1)
-
-Confirm execution with a brief JSON: { "ok": true }`,
-          { toolChoice: "required" },
+        // Fix #3: MERGE without datetime in predicate (idempotent), no LLM calls
+        await session.run(
+          `MATCH (g1:GearItem) WHERE toString(id(g1)) = $id1
+           MATCH (g2:GearItem) WHERE toString(id(g2)) = $id2
+           MERGE (g1)-[r1:IS_VARIANT_OF]->(g2)
+           ON CREATE SET r1.variant_type = $variantType, r1.confidence = $confidence,
+                         r1.detected_at = datetime(), r1.detection_method = 'name_similarity'
+           MERGE (g2)-[r2:IS_VARIANT_OF]->(g1)
+           ON CREATE SET r2.variant_type = $variantType, r2.confidence = $confidence,
+                         r2.detected_at = datetime(), r2.detection_method = 'name_similarity'`,
+          { id1: candidate.id1, id2: candidate.id2, variantType: candidate.variantType, confidence: candidate.confidence },
         );
         written++;
-      } catch (err) {
-        console.error(`[write-variant-edges] Failed to write edge ${candidate.id1} <-> ${candidate.id2}:`, err);
-        skipped++;
       }
+    } finally {
+      await session.close();
     }
 
     return { written, skipped, candidates: allCandidates };
