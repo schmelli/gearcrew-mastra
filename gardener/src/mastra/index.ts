@@ -3,13 +3,14 @@ import { gardener } from "../agents/gardener.js";
 import { variantDetection } from "../workflows/variant-detection.js";
 import { successorDetection } from "../workflows/successor-detection.js";
 import { weightVerification } from "../workflows/weight-verification.js";
+import { specNormalization } from "../workflows/spec-normalization.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
   agents: { Gardener: gardener },
-  workflows: { variantDetection, successorDetection, weightVerification },
+  workflows: { variantDetection, successorDetection, weightVerification, specNormalization },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 120000 : 600000,
