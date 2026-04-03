@@ -1,5 +1,6 @@
 import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
+import { getReadSession, getWriteSession } from "../lib/memgraph.js";
 
 // ---------------------------------------------------------------------------
 // Helper exports (also used by tests)
@@ -12,8 +13,9 @@ export function extractWeightsFromText(text: string): number[] {
   const gramsRe = /(\d{2,5})\s*(?:g\b|gram[s]?)/gi;
   // Ounces: "15.9 oz", "15.9oz" -> convert x 28.3495
   const ozRe = /(\d{1,4}(?:[.,]\d+)?)\s*oz\b/gi;
-  // Pounds+ounces: "1 lb 4 oz" — processed first to avoid oz regex consuming the oz part
-  const lbOzRe = /(\d+)\s*lb\s*(\d+)\s*oz/gi;
+  // Pounds+ounces: "1 lb 4 oz" / "1 lbs 4 oz" — processed first to avoid oz regex consuming the oz part
+  // Important #7: lbs? handles both "lb" and "lbs" plural forms
+  const lbOzRe = /(\d+)\s*lbs?\s*(\d+)\s*oz/gi;
 
   let m: RegExpExecArray | null;
 
@@ -47,6 +49,27 @@ export function extractWeightsFromText(text: string): number[] {
   return weights;
 }
 
+// Critical #1: proper hostname-based trusted-domain check (prevents "notrei.com" spoofing via .includes())
+function isTrustedDomain(url: string, trusted: string[]): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return trusted.some(d => hostname === d || hostname.endsWith("." + d));
+  } catch {
+    return false;
+  }
+}
+
+// Critical #2: deduplicate sources by URL before cross-referencing
+// Prevents a single page with "450g (15.9oz)" from counting twice toward the threshold
+function deduplicateSourcesByUrl(sources: Array<{weight: number, url: string}>): Array<{weight: number, url: string}> {
+  const seen = new Map<string, {weight: number, url: string}>();
+  for (const s of sources) {
+    const key = s.url || Math.random().toString(); // empty URLs each get unique key
+    if (!seen.has(key)) seen.set(key, s);
+  }
+  return Array.from(seen.values());
+}
+
 export function crossReferenceWeights(
   existingWeight: number,
   sources: Array<{ weight: number; url: string }>,
@@ -59,12 +82,16 @@ export function crossReferenceWeights(
   const TOLERANCE = 0.1;
   const TRUSTED_DOMAINS = ["rei.com", "backcountry.com", "outdoorgearlab.com"];
 
-  const agreeing = sources.filter(
+  // Critical #2: deduplicate before cross-referencing
+  const dedupedSources = deduplicateSourcesByUrl(sources);
+
+  const agreeing = dedupedSources.filter(
     (s) => Math.abs(s.weight - existingWeight) / existingWeight <= TOLERANCE,
   );
 
+  // Critical #1: use isTrustedDomain instead of .includes()
   const hasManufacturerSource = agreeing.some((s) =>
-    TRUSTED_DOMAINS.some((d) => s.url.includes(d)),
+    isTrustedDomain(s.url, TRUSTED_DOMAINS),
   );
 
   if (agreeing.length >= 2 || (agreeing.length >= 1 && hasManufacturerSource)) {
@@ -197,35 +224,32 @@ const fetchUnverifiedItems = createStep({
       confidenceFilter = "AND g.weightConfidence = 'medium'";
     }
 
+    // Critical #3: coalesce(g.weight_grams, g.weightGrams) to include legacy field
+    // Critical #9: searched CASE (WHEN IS NULL) — simple CASE (WHEN null) is never true in Cypher
     const query = `
 MATCH (g:GearItem)-[:PRODUCED_BY]->(b:OutdoorBrand)
-WHERE g.weight_grams IS NOT NULL
-  AND g.weight_grams > 10
+WHERE coalesce(g.weight_grams, g.weightGrams) IS NOT NULL
+  AND coalesce(g.weight_grams, g.weightGrams) > 10
   AND (g.weightConfidence IS NULL OR g.weightConfidence <> 'high')
   ${confidenceFilter}
 RETURN toString(id(g)) as id, g.name as name, b.name as brand_name,
-       g.weight_grams as current_weight,
+       coalesce(g.weight_grams, g.weightGrams) as current_weight,
        g.weightConfidence as confidence,
        g.productUrl as product_url,
        g.productTypeSlug as type_slug
 ORDER BY
-  CASE g.weightConfidence WHEN 'low' THEN 0 WHEN null THEN 1 ELSE 2 END,
-  g.weight_grams DESC
+  CASE
+    WHEN g.weightConfidence IS NULL THEN 1
+    WHEN g.weightConfidence = 'low' THEN 0
+    ELSE 2
+  END,
+  coalesce(g.weight_grams, g.weightGrams) DESC
 LIMIT ${batchSize}
 `;
 
-    const neo4j = (await import("neo4j-driver")).default;
-    const driver = neo4j.driver(
-      `bolt://${process.env.MEMGRAPH_HOST ?? "127.0.0.1"}:${process.env.MEMGRAPH_PORT ?? "7688"}`,
-      neo4j.auth.basic(
-        process.env.MEMGRAPH_USER ?? "memgraph",
-        process.env.MEMGRAPH_PASSWORD ?? "geargraph2025",
-      ),
-      { encrypted: false },
-    );
-
+    // Critical #4: use shared getReadSession() — removes hardcoded password
     let items: GearItem[] = [];
-    const session = driver.session();
+    const session = getReadSession();
     try {
       const result = await session.run(query);
       items = result.records.map((r) => {
@@ -248,7 +272,6 @@ LIMIT ${batchSize}
       });
     } finally {
       await session.close();
-      await driver.close();
     }
 
     return { items, total: items.length };
@@ -294,11 +317,13 @@ async function serperSearchWeights(
 
       const snippets: Array<{ text: string; url: string }> = [];
 
+      // Important #8: use sentinel URL instead of "" to prevent empty-string URLs
+      // from appearing in weightSource and from triggering the 2-source threshold
       if (data.answerBox?.snippet) {
-        snippets.push({ text: data.answerBox.snippet, url: "" });
+        snippets.push({ text: data.answerBox.snippet, url: "serper:answerBox" });
       }
       if (data.knowledgeGraph?.description) {
-        snippets.push({ text: data.knowledgeGraph.description, url: "" });
+        snippets.push({ text: data.knowledgeGraph.description, url: "serper:knowledgeGraph" });
       }
       for (const r of data.organic ?? []) {
         if (r.snippet) {
@@ -481,18 +506,9 @@ const writeVerifiedWeightsStep = createStep({
       return { written: 0, skipped: false };
     }
 
-    const neo4j = (await import("neo4j-driver")).default;
-    const driver = neo4j.driver(
-      `bolt://${process.env.MEMGRAPH_HOST ?? "127.0.0.1"}:${process.env.MEMGRAPH_PORT ?? "7688"}`,
-      neo4j.auth.basic(
-        process.env.MEMGRAPH_USER ?? "memgraph",
-        process.env.MEMGRAPH_PASSWORD ?? "geargraph2025",
-      ),
-      { encrypted: false },
-    );
-
+    // Critical #4: use shared getWriteSession() — removes hardcoded password
     let written = 0;
-    const session = driver.session();
+    const session = getWriteSession();
     try {
       for (const r of toWrite) {
         const source = r.agreingSources.join(", ");
@@ -504,7 +520,7 @@ const writeVerifiedWeightsStep = createStep({
                g.weightVerifiedAt = datetime()`,
           {
             id: r.id,
-            weight: neo4j.int(r.newWeight),
+            weight: r.newWeight,
             confidence: r.newConfidence,
             source,
           },
@@ -516,7 +532,6 @@ const writeVerifiedWeightsStep = createStep({
       }
     } finally {
       await session.close();
-      await driver.close();
     }
 
     return { written, skipped: false };
