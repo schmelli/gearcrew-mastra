@@ -6,15 +6,20 @@ import { getReadSession, getWriteSession } from "../lib/memgraph.js";
 // ─── Validation & Sanitization (exported for tests) ───────────────────────────
 
 export function validateSpec(key: string, value: unknown): boolean {
+  // Reject empty strings and overly long strings regardless of field
+  if (typeof value === "string" && (value.trim().length === 0 || value.length > 500)) {
+    return false;
+  }
+
   const validators: Record<string, (v: unknown) => boolean> = {
     spec_volume_liters: (v) => typeof v === "number" && v > 0 && v < 1000,
     spec_waterproof_mm: (v) => typeof v === "number" && v >= 0 && v <= 100000,
     spec_temp_rating_c: (v) => typeof v === "number" && v >= -60 && v <= 40,
     spec_fill_power: (v) => typeof v === "number" && v >= 400 && v <= 1200,
     spec_material_face: (v) =>
-      typeof v === "string" && v.length > 0 && v.length < 100,
+      typeof v === "string" && v.trim().length > 0 && v.length < 100,
     spec_material_insulation: (v) =>
-      typeof v === "string" && v.length > 0 && v.length < 100,
+      typeof v === "string" && v.trim().length > 0 && v.length < 100,
     spec_packed_size_cm: (v) =>
       typeof v === "string" && /^\d+x\d+/.test(v as string),
     spec_r_value: (v) => typeof v === "number" && v >= 0 && v <= 20,
@@ -181,10 +186,10 @@ Return null for any spec that is not clearly stated.
 Products:
 ${batch.map((item, idx) => `[${idx}] ${item.name} (${item.typeSlug ?? item.category ?? "unknown"})\n${item.description.slice(0, 800)}`).join("\n\n")}
 
-Return a JSON array with one object per product:
+Return a JSON array with one object per product, using the 0-based itemIndex from the list above:
 [
   {
-    "id": "the product id",
+    "itemIndex": 0,
     "specs": {
       "spec_volume_liters": number|null,
       "spec_waterproof_mm": number|null,
@@ -206,8 +211,8 @@ Rules:
 - Waterproof: in mm waterhead (convert "10k" → 10000)
 - R-value: as decimal (e.g. 4.2)
 - Only include a spec if it's explicitly mentioned in the description
-- For material_face: just the fabric name, not the weight/denier
-- Use the actual product id values: ${batch.map((item, idx) => `[${idx}] id="${item.id}"`).join(", ")}`;
+- Use "itemIndex" (the 0-based integer index shown in brackets above, e.g. 0, 1, 2...) to identify each product
+- For material_face: just the fabric name, not the weight/denier`;
 
       let responseText = "";
       try {
@@ -236,16 +241,35 @@ Rules:
         }
 
         const parsed = JSON.parse(jsonMatch[0]) as Array<{
-          id: string;
+          itemIndex?: number;
+          id?: string;
           specs: Record<string, unknown>;
         }>;
 
         for (const entry of parsed) {
-          // Handle case where model returns numeric index instead of real id
-          const idxMatch = String(entry.id).match(/^\d+$/);
-          const realId = idxMatch
-            ? (batch[parseInt(entry.id, 10)]?.id ?? entry.id)
-            : entry.id;
+          // Primary: use itemIndex (0-based) to look up the real Memgraph ID from the batch
+          let realId: string | undefined;
+          if (typeof entry.itemIndex === "number") {
+            realId = batch[entry.itemIndex]?.id;
+          } else if (entry.id !== undefined) {
+            // Legacy fallback: if model returned an "id" field, check if it's a
+            // numeric index (old prompt style) or an actual Memgraph string ID
+            const idStr = String(entry.id);
+            const asIndex = parseInt(idStr, 10);
+            if (!isNaN(asIndex) && asIndex >= 0 && asIndex < batch.length) {
+              realId = batch[asIndex]?.id;
+            } else {
+              realId = idStr;
+            }
+          }
+
+          if (!realId) {
+            console.warn(
+              `[extract-specs-with-haiku] Could not resolve ID for entry in batch ${i}:`,
+              entry,
+            );
+            continue;
+          }
 
           allExtracted.push({
             id: realId,
@@ -423,8 +447,9 @@ const summaryStep = createStep({
 // ─── Workflow ──────────────────────────────────────────────────────────────────
 
 export const specNormalization = createWorkflow({
-  name: "spec-normalization",
-  triggerSchema,
+  id: "spec-normalization",
+  inputSchema: triggerSchema,
+  outputSchema: summaryOutput,
 })
   .then(fetchItemsNeedingSpecs)
   .then(extractSpecsWithHaiku)
