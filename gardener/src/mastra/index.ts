@@ -5,12 +5,14 @@ import { gardener } from "../agents/gardener.js";
 // import { productDiscovery } from "../workflows/product-discovery.js";
 // import { dataQualityAudit } from "../workflows/data-quality-audit.js";
 // import { relationshipWeave } from "../workflows/relationship-weave.js";
+import { successorDetection } from "../workflows/successor-detection.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
   agents: { gardener },
+  workflows: { successorDetection },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 120000 : 600000, // 2 min in prod, 10 min in dev
@@ -18,7 +20,7 @@ export const mastra = new Mastra({
 });
 
 process.on("SIGTERM", async () => {
-  console.log("[Gardener] SIGTERM received, closing connections...");
+  console.log("[Gardener] Received SIGTERM, closing connections...");
   await closeDriver();
   process.exit(0);
 });
