@@ -6,7 +6,6 @@ import { gardener } from "../agents/gardener.js";
 // import { dataQualityAudit } from "../workflows/data-quality-audit.js";
 // import { relationshipWeave } from "../workflows/relationship-weave.js";
 import { weightVerification } from "../workflows/weight-verification.js";
-import { specNormalization } from "../workflows/spec-normalization.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -14,7 +13,6 @@ const port = parseInt(process.env.PORT || "4111", 10);
 export const mastra = new Mastra({
   agents: { gardener },
   workflows: { weightVerification },
-  workflows: { specNormalization },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 120000 : 600000, // 2 min in prod, 10 min in dev
