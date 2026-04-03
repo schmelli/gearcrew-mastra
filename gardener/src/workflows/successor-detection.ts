@@ -115,7 +115,7 @@ export function extractSuccessorFromSnippets(
 
     // Pattern: "name1 replaces/supersedes/..." -> name1 is the newer one
     if (mentionsN1) {
-      const posKeywords = ["replaces", "supersedes", "successor", "updated version", "next generation", "upgrade from"];
+      const posKeywords = ["replaces", "supersedes", "successor", "updated version", "next generation", "upgrade from", "new version of"];
       const hasPosKeyword = posKeywords.some((kw) => snippet.includes(kw));
       if (hasPosKeyword) {
         const n1Idx = snippet.indexOf(n1.slice(0, 15));
@@ -127,7 +127,7 @@ export function extractSuccessorFromSnippets(
 
     // Pattern: "name2 replaces/supersedes/..." -> name2 is the newer one
     if (mentionsN2) {
-      const posKeywords = ["replaces", "supersedes", "successor", "updated version", "next generation", "upgrade from"];
+      const posKeywords = ["replaces", "supersedes", "successor", "updated version", "next generation", "upgrade from", "new version of"];
       const hasPosKeyword = posKeywords.some((kw) => snippet.includes(kw));
       if (hasPosKeyword) {
         const n2Idx = snippet.indexOf(n2.slice(0, 15));
@@ -374,7 +374,7 @@ const fetchVersionCandidates = createStep({
       // Critical #2: filter pairs where SUPERSEDES/SUPERSEDED_BY edges already exist
       const result = await session.run(
         `MATCH (g:GearItem)-[:PRODUCED_BY]->(b:OutdoorBrand)
-WHERE g.name =~ '.*(20[12][0-9]|\\bv[2-9]\\b|\\bV[2-9]\\b|Gen [0-9]|\\bII\\b|\\bIII\\b|2nd Gen|3rd Gen).*'
+WHERE g.name =~ '.*(20[0-9]{2}|\\bv[2-9]\\b|\\bV[2-9]\\b|Gen [0-9]|\\bII\\b|\\bIII\\b|2nd Gen|3rd Gen).*'
 WITH b.name as brand, g.productTypeSlug as slug, collect(g) as items
 WHERE size(items) > 1
 UNWIND items as g1

@@ -99,4 +99,16 @@ describe("extractSuccessorFromSnippets", () => {
     expect(extractSuccessorFromSnippets(snippets, "Nemo Tensor V2", "Nemo Tensor"))
       .toBe("1_supersedes_2"); // name1 (V2) is the implied newer product
   });
+
+
+  it("detects 'new version of' keyword with both names present", () => {
+    const snippets = ["MSR WhisperLite 2024 is the new version of WhisperLite Universal"];
+    expect(
+      extractSuccessorFromSnippets(
+        snippets,
+        "MSR WhisperLite 2024",
+        "WhisperLite Universal",
+      ),
+    ).toBe("1_supersedes_2");
+  });
 });
