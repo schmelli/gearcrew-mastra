@@ -21,14 +21,14 @@ import { MAX_STEPS } from "../agents/gardener-v3.js";
 // ---------------------------------------------------------------------------
 
 const triggerSchema = z.object({
-  brandSlug: z
+  brandName: z
     .string()
     .optional()
-    .describe("Specific brand to scan (optional — if empty, picks next from queue)"),
-  categorySlug: z
+    .describe("Specific brand name to scan (optional — if empty, picks next from queue)"),
+  categoryName: z
     .string()
     .optional()
-    .describe("Specific category to scan (optional — if empty, picks next for brand)"),
+    .describe("Specific category name to scan (optional — if empty, picks next for brand)"),
 });
 
 const targetOutputSchema = z.object({
@@ -115,11 +115,11 @@ const pickNextTarget = createStep({
     const session = getReadSession();
     try {
       // --- Resolve brand ---
-      if (inputData.brandSlug) {
+      if (inputData.brandName) {
         const res = await session.run(
-          `MATCH (b:OutdoorBrand {slug: $slug})
+          `MATCH (b:OutdoorBrand {name: $name})
            RETURN b.name AS brandName, b.slug AS brandSlug, b.website AS brandWebsite`,
-          { slug: inputData.brandSlug },
+          { name: inputData.brandName },
         );
         if (res.records.length > 0) {
           const rec = res.records[0]!;
@@ -159,11 +159,11 @@ const pickNextTarget = createStep({
       let categoryName: string | undefined;
       let categorySlug: string | undefined;
 
-      if (inputData.categorySlug) {
+      if (inputData.categoryName) {
         const res = await session.run(
-          `MATCH (pt:ProductType {slug: $slug})
+          `MATCH (pt:ProductType {name: $name})
            RETURN pt.name AS categoryName, pt.slug AS categorySlug`,
-          { slug: inputData.categorySlug },
+          { name: inputData.categoryName },
         );
         if (res.records.length > 0) {
           const rec = res.records[0]!;
