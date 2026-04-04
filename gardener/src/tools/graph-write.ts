@@ -60,24 +60,46 @@ After writing, always verify with a graphQuery read-back.`,
       );
     }
 
-    const session = getWriteSession();
-    try {
-      const result = await session.run(query, params || {});
-      const counters = result.summary.counters.updates();
+    // Retry loop for Memgraph transaction conflicts
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 500;
 
-      console.log(
-        `[Gardener Write] ${reason} | Nodes+${counters.nodesCreated} Rels+${counters.relationshipsCreated}`,
-      );
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const session = getWriteSession();
+      try {
+        const result = await session.run(query, params || {});
+        const counters = result.summary.counters.updates();
 
-      return {
-        success: true,
-        nodesCreated: counters.nodesCreated,
-        propertiesSet: counters.propertiesSet,
-        relationshipsCreated: counters.relationshipsCreated,
-        summary: `Created ${counters.nodesCreated} nodes, ${counters.relationshipsCreated} relationships, set ${counters.propertiesSet} properties`,
-      };
-    } finally {
-      await session.close();
+        console.log(
+          `[Gardener Write] ${reason} | Nodes+${counters.nodesCreated} Rels+${counters.relationshipsCreated}`,
+        );
+
+        return {
+          success: true,
+          nodesCreated: counters.nodesCreated,
+          propertiesSet: counters.propertiesSet,
+          relationshipsCreated: counters.relationshipsCreated,
+          summary: `Created ${counters.nodesCreated} nodes, ${counters.relationshipsCreated} relationships, set ${counters.propertiesSet} properties`,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const isConflict = message.includes("conflicting transactions");
+
+        if (isConflict && attempt < MAX_RETRIES) {
+          console.warn(
+            `[Gardener Write] Transaction conflict (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RETRY_DELAY_MS}ms...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
+          continue;
+        }
+
+        throw err;
+      } finally {
+        await session.close();
+      }
     }
+
+    // Should never reach here, but TypeScript needs it
+    throw new Error("Max retries exceeded");
   },
 });
