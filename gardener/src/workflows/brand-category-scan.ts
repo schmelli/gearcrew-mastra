@@ -74,6 +74,14 @@ const scanOutputSchema = z.object({
   startedAt: z.string(),
   skipped: z.boolean(),
   error: z.boolean(),
+  // Detailed report fields (parsed from agent response)
+  productsChecked: z.number(),
+  productsAdded: z.number(),
+  productsUpdated: z.number(),
+  successorsFound: z.number(),
+  discontinuedMarked: z.number(),
+  specsFilled: z.number(),
+  changes: z.array(z.string()),
 });
 
 const auditOutputSchema = z.object({
@@ -85,6 +93,13 @@ const auditOutputSchema = z.object({
   toolCallCount: z.number(),
   skipped: z.boolean(),
   error: z.boolean(),
+  productsChecked: z.number(),
+  productsAdded: z.number(),
+  productsUpdated: z.number(),
+  successorsFound: z.number(),
+  discontinuedMarked: z.number(),
+  specsFilled: z.number(),
+  changes: z.array(z.string()),
 });
 
 const reportOutputSchema = z.object({
@@ -93,6 +108,13 @@ const reportOutputSchema = z.object({
   brandName: z.string().optional(),
   categoryName: z.string().optional(),
   toolCallCount: z.number(),
+  productsChecked: z.number(),
+  productsAdded: z.number(),
+  productsUpdated: z.number(),
+  successorsFound: z.number(),
+  discontinuedMarked: z.number(),
+  specsFilled: z.number(),
+  changes: z.array(z.string()),
 });
 
 // ---------------------------------------------------------------------------
@@ -292,6 +314,54 @@ const loadGraphState = createStep({
 });
 
 // ---------------------------------------------------------------------------
+// Report parser — extracts structured data from agent's JSON response
+// ---------------------------------------------------------------------------
+
+interface ParsedReport {
+  productsChecked: number;
+  productsAdded: number;
+  productsUpdated: number;
+  successorsFound: number;
+  discontinuedMarked: number;
+  specsFilled: number;
+  changes: string[];
+}
+
+const EMPTY_REPORT: ParsedReport = {
+  productsChecked: 0,
+  productsAdded: 0,
+  productsUpdated: 0,
+  successorsFound: 0,
+  discontinuedMarked: 0,
+  specsFilled: 0,
+  changes: [],
+};
+
+function parseAgentReport(text: string): ParsedReport {
+  // Extract JSON from markdown code fence
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  if (!fenceMatch) return EMPTY_REPORT;
+
+  try {
+    const parsed = JSON.parse(fenceMatch[1].trim()) as Record<string, unknown>;
+    return {
+      productsChecked: Number(parsed.productsChecked ?? 0),
+      productsAdded: Number(parsed.productsAdded ?? 0),
+      productsUpdated: Number(parsed.productsUpdated ?? 0),
+      successorsFound: Number(parsed.successorsFound ?? 0),
+      discontinuedMarked: Number(parsed.discontinuedMarked ?? 0),
+      specsFilled: Number(parsed.specsFilled ?? 0),
+      changes: Array.isArray(parsed.changes)
+        ? (parsed.changes as unknown[]).map(String).slice(0, 50)
+        : [],
+    };
+  } catch {
+    console.warn("[parseAgentReport] Failed to parse JSON from agent response");
+    return EMPTY_REPORT;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Step 3: scan-category (agent call)
 // ---------------------------------------------------------------------------
 
@@ -301,6 +371,8 @@ const scanCategory = createStep({
   inputSchema: graphStateOutputSchema,
   outputSchema: scanOutputSchema,
   execute: async ({ inputData, mastra }) => {
+    const emptyReport = { ...EMPTY_REPORT };
+
     if (inputData.skipped) {
       return {
         agentResponse: "Skipped — no target to scan.",
@@ -311,6 +383,7 @@ const scanCategory = createStep({
         startedAt: inputData.startedAt,
         skipped: true,
         error: false,
+        ...emptyReport,
       };
     }
 
@@ -341,13 +414,41 @@ Deine Aufgaben:
 4. Trage fehlende Spezifikationen nach (Gewicht, Preis, URL, Beschreibung)
 5. Setze last_verified_at = datetime() auf alle geprüften Items
 
-Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScrape zum Recherchieren.`;
+Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScrape zum Recherchieren.
+
+WICHTIG — Wenn du fertig bist, schreibe am Ende deiner Antwort einen strukturierten Report im folgenden EXAKTEN Format (JSON in einem Codeblock):
+
+\`\`\`json
+{
+  "productsChecked": 12,
+  "productsAdded": 2,
+  "productsUpdated": 5,
+  "successorsFound": 1,
+  "discontinuedMarked": 1,
+  "specsFilled": 8,
+  "changes": [
+    "ADDED: Tensor Trail Sleeping Pad (nemo-equipment_tensor-trail) — 454g, $199.95",
+    "UPDATED: Flyer 2P — weight 1360g, price $399.95, URL added",
+    "SUCCESSOR: Tensor Elite ersetzt Tensor Insulated",
+    "DISCONTINUED: Switchback (nicht mehr im aktuellen Lineup)",
+    "SPECS: Astro Insulated — weight_grams: 850, price_usd: 219.95 nachgetragen"
+  ]
+}
+\`\`\`
+
+Jede Änderung muss als einzelne Zeile im changes-Array stehen. Prefixes: ADDED, UPDATED, SUCCESSOR, DISCONTINUED, SPECS, VERIFIED.`;
 
     try {
       const result = await agent.generate(prompt, { toolChoice: "auto", maxSteps: MAX_STEPS });
+      const responseText = result.text ?? "";
+      const report = parseAgentReport(responseText);
+
+      console.log(
+        `[scan-category] ${inputData.brandName}/${inputData.categoryName}: +${report.productsAdded} added, ~${report.productsUpdated} updated, ${report.successorsFound} successors, ${report.changes.length} changes`,
+      );
 
       return {
-        agentResponse: result.text ?? "",
+        agentResponse: responseText,
         toolCallCount: result.steps?.length ?? 0,
         brandName: inputData.brandName,
         categoryName: inputData.categoryName,
@@ -355,6 +456,7 @@ Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScr
         startedAt: inputData.startedAt,
         skipped: false,
         error: false,
+        ...report,
       };
     } catch (err) {
       console.error("[scan-category] agent.generate() failed:", err);
@@ -367,6 +469,7 @@ Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScr
         startedAt: inputData.startedAt,
         skipped: false,
         error: true,
+        ...emptyReport,
       };
     }
   },
@@ -392,6 +495,13 @@ const markAudited = createStep({
         toolCallCount: inputData.toolCallCount,
         skipped: inputData.skipped,
         error: inputData.error,
+        productsChecked: inputData.productsChecked,
+        productsAdded: inputData.productsAdded,
+        productsUpdated: inputData.productsUpdated,
+        successorsFound: inputData.successorsFound,
+        discontinuedMarked: inputData.discontinuedMarked,
+        specsFilled: inputData.specsFilled,
+        changes: inputData.changes,
       };
     }
 
@@ -434,6 +544,13 @@ const markAudited = createStep({
         toolCallCount: inputData.toolCallCount,
         skipped: false,
         error: false,
+        productsChecked: inputData.productsChecked,
+        productsAdded: inputData.productsAdded,
+        productsUpdated: inputData.productsUpdated,
+        successorsFound: inputData.successorsFound,
+        discontinuedMarked: inputData.discontinuedMarked,
+        specsFilled: inputData.specsFilled,
+        changes: inputData.changes,
       };
     } finally {
       await session.close();
@@ -462,7 +579,14 @@ const writeReport = createStep({
              r.brandName = $brandName,
              r.categoryName = $categoryName,
              r.toolCalls = $toolCallCount,
-             r.outcome = $outcome`,
+             r.outcome = $outcome,
+             r.productsChecked = $productsChecked,
+             r.productsAdded = $productsAdded,
+             r.productsUpdated = $productsUpdated,
+             r.successorsFound = $successorsFound,
+             r.discontinuedMarked = $discontinuedMarked,
+             r.specsFilled = $specsFilled,
+             r.changes = $changes`,
         {
           cycleId: inputData.cycleId,
           startedAt: inputData.startedAt,
@@ -470,6 +594,13 @@ const writeReport = createStep({
           categoryName: inputData.categoryName,
           toolCallCount: inputData.toolCallCount,
           outcome,
+          productsChecked: inputData.productsChecked,
+          productsAdded: inputData.productsAdded,
+          productsUpdated: inputData.productsUpdated,
+          successorsFound: inputData.successorsFound,
+          discontinuedMarked: inputData.discontinuedMarked,
+          specsFilled: inputData.specsFilled,
+          changes: inputData.changes,
         },
       );
     } finally {
@@ -482,6 +613,13 @@ const writeReport = createStep({
       brandName: inputData.brandName,
       categoryName: inputData.categoryName,
       toolCallCount: inputData.toolCallCount,
+      productsChecked: inputData.productsChecked,
+      productsAdded: inputData.productsAdded,
+      productsUpdated: inputData.productsUpdated,
+      successorsFound: inputData.successorsFound,
+      discontinuedMarked: inputData.discontinuedMarked,
+      specsFilled: inputData.specsFilled,
+      changes: inputData.changes,
     };
   },
 });
