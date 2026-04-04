@@ -1,24 +1,20 @@
 import { Mastra } from "@mastra/core/mastra";
-import { gardener } from "../agents/gardener.js";
-import { variantDetection } from "../workflows/variant-detection.js";
-import { successorDetection } from "../workflows/successor-detection.js";
-import { weightVerification } from "../workflows/weight-verification.js";
-import { specNormalization } from "../workflows/spec-normalization.js";
+import { gardenerV3 } from "../agents/gardener-v3.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
-  agents: { Gardener: gardener },
-  workflows: { variantDetection, successorDetection, weightVerification, specNormalization },
+  agents: { GardenerV3: gardenerV3 },
+  // Workflows will be added in Phase 2
   server: {
     port,
-    timeout: process.env.NODE_ENV === "production" ? 120000 : 600000,
+    timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,
   },
 });
 
 process.on("SIGTERM", async () => {
-  console.log("[Gardener] Received SIGTERM, closing connections...");
+  console.log("[Gardener v3] Received SIGTERM, closing connections...");
   await closeDriver();
   process.exit(0);
 });
