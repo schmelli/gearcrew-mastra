@@ -14,6 +14,7 @@ import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getReadSession, getWriteSession, toNumber } from "../lib/memgraph.js";
+import { MAX_STEPS } from "../agents/gardener-v3.js";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -72,6 +73,7 @@ const scanOutputSchema = z.object({
   cycleId: z.string(),
   startedAt: z.string(),
   skipped: z.boolean(),
+  error: z.boolean(),
 });
 
 const auditOutputSchema = z.object({
@@ -82,6 +84,7 @@ const auditOutputSchema = z.object({
   startedAt: z.string(),
   toolCallCount: z.number(),
   skipped: z.boolean(),
+  error: z.boolean(),
 });
 
 const reportOutputSchema = z.object({
@@ -168,10 +171,13 @@ const pickNextTarget = createStep({
           categorySlug = rec.get("categorySlug") as string;
         }
       } else {
+        // Find next un-audited category for this brand
+        // Uses AUDITED_CATEGORY relationship (brand-specific) instead of global ProductType property
         const res = await session.run(
           `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
            WITH DISTINCT pt, b
-           ORDER BY pt.last_brand_audit ASC NULLS FIRST
+           OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(pt)
+           ORDER BY audit.at ASC NULLS FIRST
            LIMIT 1
            RETURN pt.name AS categoryName, pt.slug AS categorySlug`,
           { brandName },
@@ -206,6 +212,8 @@ const pickNextTarget = createStep({
           startedAt,
         };
       }
+
+      console.log(`[pick-next-target] Selected: ${brandName} / ${categoryName}`);
 
       return {
         brandName,
@@ -303,6 +311,7 @@ const scanCategory = createStep({
         cycleId: inputData.cycleId,
         startedAt: inputData.startedAt,
         skipped: true,
+        error: false,
       };
     }
 
@@ -336,7 +345,7 @@ Deine Aufgaben:
 Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScrape zum Recherchieren.`;
 
     try {
-      const result = await agent.generate(prompt, { toolChoice: "required" });
+      const result = await agent.generate(prompt, { toolChoice: "auto", maxSteps: MAX_STEPS });
 
       return {
         agentResponse: result.text ?? "",
@@ -346,6 +355,7 @@ Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScr
         cycleId: inputData.cycleId,
         startedAt: inputData.startedAt,
         skipped: false,
+        error: false,
       };
     } catch (err) {
       console.error("[scan-category] agent.generate() failed:", err);
@@ -357,6 +367,7 @@ Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScr
         cycleId: inputData.cycleId,
         startedAt: inputData.startedAt,
         skipped: false,
+        error: true,
       };
     }
   },
@@ -372,7 +383,7 @@ const markAudited = createStep({
   inputSchema: scanOutputSchema,
   outputSchema: auditOutputSchema,
   execute: async ({ inputData }) => {
-    if (inputData.skipped) {
+    if (inputData.skipped || inputData.error) {
       return {
         brandName: inputData.brandName,
         categoryName: inputData.categoryName,
@@ -380,24 +391,29 @@ const markAudited = createStep({
         cycleId: inputData.cycleId,
         startedAt: inputData.startedAt,
         toolCallCount: inputData.toolCallCount,
-        skipped: true,
+        skipped: inputData.skipped,
+        error: inputData.error,
       };
     }
 
     const session = getWriteSession();
     try {
-      // Mark category as audited
+      // Mark category as audited FOR THIS BRAND (brand-specific relationship)
       await session.run(
-        `MATCH (pt:ProductType {name: $categoryName})
-         SET pt.last_brand_audit = datetime()`,
-        { categoryName: inputData.categoryName },
+        `MATCH (b:OutdoorBrand {name: $brandName}), (pt:ProductType {name: $categoryName})
+         MERGE (b)-[audit:AUDITED_CATEGORY]->(pt)
+         SET audit.at = datetime()`,
+        { brandName: inputData.brandName, categoryName: inputData.categoryName },
       );
 
       // Check if ALL categories for this brand are now audited (within last 7 days)
       const res = await session.run(
         `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
-         WITH b, collect(DISTINCT pt.last_brand_audit) AS audits
-         WHERE ALL(a IN audits WHERE a IS NOT NULL AND a > datetime() - duration('P7D'))
+         WITH b, collect(DISTINCT pt) AS categories
+         OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(pt2) WHERE pt2 IN categories
+         WITH b, size(categories) AS total, count(audit) AS audited,
+              [a IN collect(audit.at) WHERE a IS NOT NULL AND a > datetime() - duration('P7D')] AS recentAudits
+         WHERE size(recentAudits) = total
          SET b.last_audited_at = datetime()
          RETURN b.name AS brandAudited`,
         { brandName: inputData.brandName },
@@ -417,6 +433,7 @@ const markAudited = createStep({
         startedAt: inputData.startedAt,
         toolCallCount: inputData.toolCallCount,
         skipped: false,
+        error: false,
       };
     } finally {
       await session.close();
@@ -434,7 +451,7 @@ const writeReport = createStep({
   inputSchema: auditOutputSchema,
   outputSchema: reportOutputSchema,
   execute: async ({ inputData }) => {
-    const outcome = inputData.skipped ? "skipped" : "completed";
+    const outcome = inputData.error ? "error" : inputData.skipped ? "skipped" : "completed";
 
     const session = getWriteSession();
     try {

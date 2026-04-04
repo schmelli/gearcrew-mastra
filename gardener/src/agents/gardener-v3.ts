@@ -78,3 +78,6 @@ Du bekommst eine Brand und eine Produktkategorie. Dazu die aktuellen Produkte di
     getOntology,
   },
 });
+
+/** Default maxSteps for generate() calls — pass to agent.generate(prompt, { maxSteps: MAX_STEPS }) */
+export const MAX_STEPS = 40;

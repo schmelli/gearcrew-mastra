@@ -14,8 +14,11 @@ export const mastra = new Mastra({
   },
 });
 
-process.on("SIGTERM", async () => {
-  console.log("[Gardener v3] Received SIGTERM, closing connections...");
+async function gracefulShutdown(signal: string) {
+  console.log(`[Gardener v3] Received ${signal}, closing connections...`);
   await closeDriver();
   process.exit(0);
-});
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
