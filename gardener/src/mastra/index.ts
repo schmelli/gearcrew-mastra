@@ -43,7 +43,7 @@ function startScheduler(): void {
 
     try {
       const workflow = mastra.getWorkflow("brandCategoryScan");
-      const run = await workflow.createRun();
+      const run = await workflow.createRunAsync();
       const result = await run.start({ inputData: {} });
       const duration = Math.round((Date.now() - startTime) / 1000);
       console.log(`[Gardener v3] Scan complete (${duration}s):`, JSON.stringify(result).slice(0, 300));
