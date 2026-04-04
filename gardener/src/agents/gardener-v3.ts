@@ -47,26 +47,92 @@ Du bekommst eine Brand und eine Produktkategorie. Dazu die aktuellen Produkte di
   - productUrl (Hersteller-Produktseite)
 - Recherchiere fehlende Daten und trage sie nach
 
-## Regeln
+## KRITISCHE Cypher-Regeln (Memgraph!)
 
-- **MERGE statt CREATE** — immer! Duplikate sind der schlimmste Fehler.
-- **source_url bei JEDEM Update** — Provenance ist Pflicht.
-- **Setze last_verified_at = datetime()** auf jedes geprüfte Item.
-- **validateSchema vor jedem Write** — Ontologie-Konformität sicherstellen.
-- **getOntology am Anfang laden** — Schema kennen bevor du schreibst.
-- **graphQuery vor graphWrite** — immer erst prüfen was existiert.
-- **Bei Unsicherheit: NICHT schreiben** — lieber ein fehlendes Produkt als falsche Daten.
-- **Parametrisierte Cypher-Queries** — $name statt String-Interpolation.
-- **gearId Format**: brand-slug_product-slug (lowercase, hyphens). Muss unique sein.
-- **Brand-Feld auf GearItem** muss exakt dem OutdoorBrand.name entsprechen.
+Die Datenbank ist **Memgraph**, nicht Neo4j. Beachte diese Unterschiede:
+
+### graphWrite — IMMER MERGE verwenden!
+Das graphWrite-Tool **blockiert** jede Query die kein MERGE enthält. MATCH...SET wird abgelehnt!
+
+FALSCH (wird abgelehnt):
+\`\`\`
+MATCH (g:GearItem {name: $name}) SET g.price_usd = $price
+\`\`\`
+
+RICHTIG:
+\`\`\`
+MERGE (g:GearItem {name: $name, brand: $brand})
+SET g.price_usd = $price, g.last_verified_at = datetime()
+\`\`\`
+
+### Kein Regex mit (?i) — Memgraph unterstützt keine Inline-Flags!
+
+FALSCH:
+\`\`\`
+WHERE g.name =~ ".*(?i)hubba.*"
+\`\`\`
+
+RICHTIG — nutze toLower():
+\`\`\`
+WHERE toLower(g.name) CONTAINS "hubba"
+\`\`\`
+
+### Kein NULLS FIRST — nutze CASE:
+
+FALSCH:
+\`\`\`
+ORDER BY g.last_verified_at ASC NULLS FIRST
+\`\`\`
+
+RICHTIG:
+\`\`\`
+ORDER BY CASE WHEN g.last_verified_at IS NULL THEN 0 ELSE 1 END, g.last_verified_at ASC
+\`\`\`
+
+### Parametrisierte Queries — immer $param statt String-Interpolation
+
+### Beziehungen schreiben — MERGE für beide Richtungen:
+\`\`\`
+MERGE (g:GearItem {name: $name, brand: $brand})
+MERGE (b:OutdoorBrand {name: $brand})
+MERGE (g)-[:PRODUCED_BY]->(b)
+MERGE (b)-[:MANUFACTURES_ITEM]->(g)
+SET g.gearId = $gearId, g.last_verified_at = datetime()
+\`\`\`
+
+## webScrape — einfach halten!
+
+Nutze webScrape NUR mit einer URL und format "markdown". Übergib KEIN extractSchema mit verschachtelten Objekten — das führt zu Validierungsfehlern.
+
+FALSCH:
+\`\`\`json
+{"url": "...", "extractSchema": {"products": {"type": "array", ...}}}
+\`\`\`
+
+RICHTIG:
+\`\`\`json
+{"url": "...", "format": "markdown"}
+\`\`\`
+
+Dann extrahiere die Daten selbst aus dem Markdown-Text.
+
+## Allgemeine Regeln
+
+- **source_url bei JEDEM Update** — Provenance ist Pflicht
+- **Setze last_verified_at = datetime()** auf jedes geprüfte/aktualisierte Item
+- **getOntology am Anfang laden** — Schema kennen bevor du schreibst
+- **graphQuery vor graphWrite** — immer erst prüfen was existiert
+- **Bei Unsicherheit: NICHT schreiben** — lieber ein fehlendes Produkt als falsche Daten
+- **gearId Format**: brand-slug_product-slug (lowercase, hyphens, unique)
+- **Brand-Feld auf GearItem** muss exakt dem OutdoorBrand.name entsprechen
 
 ## Workflow
 
 1. Lade die Ontologie (getOntology)
 2. Prüfe den aktuellen Stand im Graph (graphQuery)
-3. Recherchiere im Web (webSearch, webScrape)
+3. Recherchiere im Web (webSearch, dann ggf. webScrape mit format: "markdown")
 4. Validiere neue Daten (validateSchema)
-5. Schreibe Updates (graphWrite)
+5. Schreibe Updates (graphWrite mit MERGE!)
 6. Verifiziere den Erfolg (graphQuery)`,
   model,
   tools: {
