@@ -129,11 +129,9 @@ const pickNextTarget = createStep({
         }
       } else {
         const res = await session.run(
-          `MATCH (b:OutdoorBrand)
-           OPTIONAL MATCH (b)-[:MANUFACTURES_ITEM]->(g:GearItem)
+          `MATCH (b:OutdoorBrand)-[:MANUFACTURES_ITEM]->(g:GearItem)
            WITH b, count(g) AS productCount
-           WHERE productCount > 0
-           ORDER BY b.last_audited_at ASC NULLS FIRST
+           ORDER BY CASE WHEN b.last_audited_at IS NULL THEN 0 ELSE 1 END, b.last_audited_at ASC
            LIMIT 1
            RETURN b.name AS brandName, b.slug AS brandSlug, b.website AS brandWebsite,
                   b.last_audited_at AS lastAuditedAt, productCount`,
@@ -177,7 +175,8 @@ const pickNextTarget = createStep({
           `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
            WITH DISTINCT pt, b
            OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(pt)
-           ORDER BY audit.at ASC NULLS FIRST
+           WITH pt, audit
+           ORDER BY CASE WHEN audit.at IS NULL THEN 0 ELSE 1 END, audit.at ASC
            LIMIT 1
            RETURN pt.name AS categoryName, pt.slug AS categorySlug`,
           { brandName },
@@ -407,13 +406,14 @@ const markAudited = createStep({
       );
 
       // Check if ALL categories for this brand are now audited (within last 7 days)
+      // Simple approach: count total categories vs audited categories
       const res = await session.run(
         `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
-         WITH b, collect(DISTINCT pt) AS categories
-         OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(pt2) WHERE pt2 IN categories
-         WITH b, size(categories) AS total, count(audit) AS audited,
-              [a IN collect(audit.at) WHERE a IS NOT NULL AND a > datetime() - duration('P7D')] AS recentAudits
-         WHERE size(recentAudits) = total
+         WITH b, count(DISTINCT pt) AS totalCategories
+         OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(:ProductType)
+         WHERE audit.at > datetime() - duration('P7D')
+         WITH b, totalCategories, count(audit) AS auditedCategories
+         WHERE auditedCategories >= totalCategories
          SET b.last_audited_at = datetime()
          RETURN b.name AS brandAudited`,
         { brandName: inputData.brandName },
