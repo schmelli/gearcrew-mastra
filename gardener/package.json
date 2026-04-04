@@ -18,10 +18,12 @@
     "@mastra/core": "~0.24.9",
     "mastra": "~0.18.9",
     "neo4j-driver": "^5.17.0",
+    "node-cron": "^4.2.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/node-cron": "^3.0.11",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",
