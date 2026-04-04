@@ -1,12 +1,13 @@
 import { Mastra } from "@mastra/core/mastra";
 import { gardenerV3 } from "../agents/gardener-v3.js";
+import { brandCategoryScan } from "../workflows/brand-category-scan.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
   agents: { GardenerV3: gardenerV3 },
-  // Workflows will be added in Phase 2
+  workflows: { brandCategoryScan },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,
