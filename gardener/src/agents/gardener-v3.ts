@@ -116,10 +116,16 @@ RICHTIG:
 
 Dann extrahiere die Daten selbst aus dem Markdown-Text.
 
-## Allgemeine Regeln
+## Datenqualitaet — KRITISCHE Regeln
 
+- **weight_grams MUSS eine Ganzzahl in Gramm sein!** Niemals Strings, Brand-Namen oder andere Werte in dieses Feld schreiben. Beispiel: 88 (nicht "88g", nicht "Garmin", nicht "3.1 oz"). Wenn du das Gewicht nicht findest → Feld NICHT setzen.
+- **Keine Duplikate!** Bevor du ein Produkt hinzufuegst: graphQuery um zu pruefen ob es schon existiert (auch mit leicht anderem Namen). "Hexamid" und "Hexamid Tent" sind das GLEICHE Produkt.
+- **Nachfolger-Kanten sind GERICHTET!** (newer)-[:SUPERSEDES]->(older). NIEMALS in beide Richtungen. Pruefe vor dem Schreiben ob die Kante schon existiert.
 - **source_url bei JEDEM Update** — Provenance ist Pflicht
 - **Setze last_verified_at = datetime()** auf jedes geprüfte/aktualisierte Item
+
+## Allgemeine Regeln
+
 - **getOntology am Anfang laden** — Schema kennen bevor du schreibst
 - **graphQuery vor graphWrite** — immer erst prüfen was existiert
 - **Bei Unsicherheit: NICHT schreiben** — lieber ein fehlendes Produkt als falsche Daten
