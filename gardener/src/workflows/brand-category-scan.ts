@@ -14,7 +14,7 @@ import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getReadSession, getWriteSession, toNumber } from "../lib/memgraph.js";
-import { MAX_STEPS } from "../agents/gardener-v3.js";
+import { MAX_STEPS, SONNET_MAX_STEPS } from "../agents/gardener-v3.js";
 
 // ---------------------------------------------------------------------------
 // Top brands — prioritized for scanning (well-known outdoor gear companies)
@@ -490,7 +490,8 @@ const scanCategory = createStep({
     }
 
     if (!mastra) throw new Error("Mastra context is required");
-    const agent = mastra.getAgent("GardenerV3");
+    const haikuAgent = mastra.getAgent("GardenerHaiku");
+    const sonnetAgent = mastra.getAgent("GardenerSonnet");
     const isClassifyMode = inputData.categoryName === "__classify__";
     const isAllMode = inputData.categoryName === "__all__";
 
@@ -588,56 +589,121 @@ Brand-Website: ${inputData.brandWebsite || "nicht bekannt"}
 Aktuell im Graph (${inputData.productCount} Produkte):
 ${productList}
 
-Deine Aufgaben:
+Deine Aufgaben (NUR Recherche und Specs — KEINE Nachfolger-Erkennung!):
 1. Recherchiere welche aktuellen ${inputData.categoryName}-Produkte ${inputData.brandName} anbietet
 2. Ergänze fehlende Produkte via MERGE
-3. Erkenne Nachfolger-Produkte und setze SUPERSEDES/SUPERSEDED_BY-Kanten
-4. Trage fehlende Spezifikationen nach (Gewicht, Preis, URL, Beschreibung)
-5. Setze last_verified_at = datetime() auf alle geprüften Items
+3. Trage fehlende Spezifikationen nach (Gewicht, Preis, URL, Beschreibung)
+4. Setze last_verified_at = datetime() auf alle geprüften Items
+
+WICHTIG: Setze KEINE SUPERSEDES-Kanten und markiere NICHTS als discontinued! Das macht ein anderer Agent.
 
 Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScrape zum Recherchieren.
 
-WICHTIG — Wenn du fertig bist, schreibe am Ende deiner Antwort einen strukturierten Report im folgenden EXAKTEN Format (JSON in einem Codeblock):
+WICHTIG — Wenn du fertig bist, schreibe am Ende einen Report:
 
 \`\`\`json
 {
   "productsChecked": 12,
   "productsAdded": 2,
   "productsUpdated": 5,
-  "successorsFound": 1,
-  "discontinuedMarked": 1,
+  "successorsFound": 0,
+  "discontinuedMarked": 0,
   "specsFilled": 8,
   "changes": [
-    "ADDED: Tensor Trail Sleeping Pad (nemo-equipment_tensor-trail) — 454g, $199.95",
-    "UPDATED: Flyer 2P — weight 1360g, price $399.95, URL added",
-    "SUCCESSOR: Tensor Elite ersetzt Tensor Insulated",
-    "DISCONTINUED: Switchback (nicht mehr im aktuellen Lineup)",
-    "SPECS: Astro Insulated — weight_grams: 850, price_usd: 219.95 nachgetragen"
+    "ADDED: Product Name (gear-id) — 450g, $199",
+    "UPDATED: Product Name — weight, price added",
+    "SPECS: Product Name — weight_grams: 850 nachgetragen"
   ]
 }
 \`\`\`
 
-Jede Änderung muss als einzelne Zeile im changes-Array stehen. Prefixes: ADDED, UPDATED, SUCCESSOR, DISCONTINUED, SPECS, VERIFIED.`;
+Prefixes: ADDED, UPDATED, SPECS, VERIFIED.`;
 
     try {
-      const result = await agent.generate(prompt, { toolChoice: "auto", maxSteps: MAX_STEPS });
-      const responseText = result.text ?? "";
-      const report = parseAgentReport(responseText);
+      // --- Phase 1: Haiku researches, adds products, fills specs ---
+      console.log(`[scan-category] Phase 1 (Haiku): ${inputData.brandName}/${inputData.categoryName}`);
+      const haikuResult = await haikuAgent.generate(prompt, { toolChoice: "auto", maxSteps: MAX_STEPS });
+      const haikuText = haikuResult.text ?? "";
+      const haikuReport = parseAgentReport(haikuText);
+      const haikuSteps = haikuResult.steps?.length ?? 0;
 
       console.log(
-        `[scan-category] ${inputData.brandName}/${inputData.categoryName}: +${report.productsAdded} added, ~${report.productsUpdated} updated, ${report.successorsFound} successors, ${report.changes.length} changes`,
+        `[scan-category] Haiku done: +${haikuReport.productsAdded} added, ~${haikuReport.productsUpdated} updated, ${haikuReport.specsFilled} specs | ${haikuSteps} steps`,
       );
 
+      // --- Phase 2: Sonnet reviews for successors (only if products were added or many exist) ---
+      let sonnetReport = { ...EMPTY_REPORT };
+      let sonnetSteps = 0;
+
+      if (haikuReport.productsAdded > 0 || inputData.productCount >= 3) {
+        console.log(`[scan-category] Phase 2 (Sonnet): successor review for ${inputData.brandName}/${inputData.categoryName}`);
+
+        const sonnetPrompt = `Pruefe die Produkte der Brand "${inputData.brandName}" in der Kategorie "${inputData.categoryName}" auf Nachfolger-Beziehungen.
+
+Haiku hat gerade ${haikuReport.productsAdded} neue Produkte hinzugefuegt und ${haikuReport.productsUpdated} aktualisiert.
+
+Aenderungen von Haiku:
+${haikuReport.changes.map(ch => "- " + ch).join("\n") || "(keine)"}
+
+Deine Aufgaben:
+1. Lade die aktuellen Produkte dieser Brand+Kategorie aus dem Graph (graphQuery)
+2. Pruefe: Gibt es Nachfolger-Beziehungen? (Jahreszahlen, Versionsnummern, Namenszusaetze)
+3. Setze SUPERSEDES-Kanten: (newer)-[:SUPERSEDES]->(older) — pruefe vorher ob sie schon existiert!
+4. Markiere abgekuendigte Produkte: SET g.discontinued = true
+
+Schreibe am Ende einen Report:
+
+\`\`\`json
+{
+  "productsChecked": 0,
+  "productsAdded": 0,
+  "productsUpdated": 0,
+  "successorsFound": 2,
+  "discontinuedMarked": 1,
+  "specsFilled": 0,
+  "changes": [
+    "SUCCESSOR: New Model ersetzt Old Model",
+    "DISCONTINUED: Old Model (nicht mehr im aktuellen Lineup)"
+  ]
+}
+\`\`\``;
+
+        try {
+          const sonnetResult = await sonnetAgent.generate(sonnetPrompt, { toolChoice: "auto", maxSteps: SONNET_MAX_STEPS });
+          sonnetReport = parseAgentReport(sonnetResult.text ?? "");
+          sonnetSteps = sonnetResult.steps?.length ?? 0;
+          console.log(
+            `[scan-category] Sonnet done: ${sonnetReport.successorsFound} successors, ${sonnetReport.discontinuedMarked} discontinued | ${sonnetSteps} steps`,
+          );
+        } catch (sonnetErr) {
+          console.error("[scan-category] Sonnet review failed (non-critical):", sonnetErr);
+          // Sonnet failure is non-critical — Haiku's work is already saved
+        }
+      } else {
+        console.log(`[scan-category] Skipping Sonnet (no new products, <3 existing)`);
+      }
+
+      // --- Merge reports ---
+      const mergedReport: ParsedReport = {
+        productsChecked: haikuReport.productsChecked + sonnetReport.productsChecked,
+        productsAdded: haikuReport.productsAdded + sonnetReport.productsAdded,
+        productsUpdated: haikuReport.productsUpdated + sonnetReport.productsUpdated,
+        successorsFound: haikuReport.successorsFound + sonnetReport.successorsFound,
+        discontinuedMarked: haikuReport.discontinuedMarked + sonnetReport.discontinuedMarked,
+        specsFilled: haikuReport.specsFilled + sonnetReport.specsFilled,
+        changes: [...haikuReport.changes, ...sonnetReport.changes],
+      };
+
       return {
-        agentResponse: responseText,
-        toolCallCount: result.steps?.length ?? 0,
+        agentResponse: haikuText,
+        toolCallCount: haikuSteps + sonnetSteps,
         brandName: inputData.brandName,
         categoryName: inputData.categoryName,
         cycleId: inputData.cycleId,
         startedAt: inputData.startedAt,
         skipped: false,
         error: false,
-        ...report,
+        ...mergedReport,
       };
     } catch (err) {
       console.error("[scan-category] agent.generate() failed:", err);

@@ -8,46 +8,30 @@ import {
   getOntology,
 } from "../tools/index.js";
 
-// Claude Sonnet via Vercel AI Gateway
-const model = {
+// ---------------------------------------------------------------------------
+// Models via Vercel AI Gateway
+// ---------------------------------------------------------------------------
+
+const gatewayConfig = {
   url: process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1",
-  id: "anthropic/claude-sonnet-4-5" as const,
   apiKey: process.env.AI_GATEWAY_API_KEY ?? "",
 };
 
-export const gardenerV3 = new Agent({
-  id: "gardener-v3",
-  name: "GardenerV3",
-  instructions: `Du bist der Graph-Gardener v3. Du pflegst den GearGraph autonom — Brand für Brand, Kategorie für Kategorie.
+const haikuModel = {
+  ...gatewayConfig,
+  id: "anthropic/claude-haiku-4-5" as const,
+};
 
-Du bekommst eine Brand und eine Produktkategorie. Dazu die aktuellen Produkte dieser Kombination aus dem Graph (inkl. fehlender Felder).
+const sonnetModel = {
+  ...gatewayConfig,
+  id: "anthropic/claude-sonnet-4-5" as const,
+};
 
-## Deine 3 Aufgaben
+// ---------------------------------------------------------------------------
+// Shared Cypher & quality rules (used by both agents)
+// ---------------------------------------------------------------------------
 
-### 1. FEHLENDE PRODUKTE FINDEN
-- Recherchiere auf der Hersteller-Website und via Web-Suche, welche aktuellen Produkte diese Brand in dieser Kategorie anbietet
-- Vergleiche mit den Produkten im Graph
-- Ergänze fehlende Produkte via MERGE (nie CREATE!)
-- Jedes neue Produkt braucht: name, brand, gearId (format: brand-slug_product-slug), und die PRODUCED_BY + MANUFACTURES_ITEM Kanten
-
-### 2. NACHFOLGER ERKENNEN
-- Wenn ein Produkt im Graph durch ein neueres Modell ersetzt wurde:
-  - MERGE den Nachfolger als neuen GearItem-Knoten (falls nicht im Graph)
-  - Setze SUPERSEDES und SUPERSEDED_BY Kanten zwischen alt und neu
-  - Markiere abgekündigte Produkte: SET g.discontinued = true
-- Typische Signale: Jahreszahlen (2024→2025), Versionsnummern (v2→v3), Namenszusätze (NX→NX2)
-
-### 3. FEHLENDE SPEZIFIKATIONEN NACHTRAGEN
-- Prüfe ob bestehende Produkte unvollständig sind:
-  - weight_grams (Integer, in Gramm!)
-  - price_usd (Float)
-  - description (String)
-  - features (Array von Strings)
-  - materials (String)
-  - productUrl (Hersteller-Produktseite)
-- Recherchiere fehlende Daten und trage sie nach
-
-## KRITISCHE Cypher-Regeln (Memgraph!)
+const CYPHER_RULES = `## KRITISCHE Cypher-Regeln (Memgraph!)
 
 Die Datenbank ist **Memgraph**, nicht Neo4j. Beachte diese Unterschiede:
 
@@ -66,32 +50,14 @@ SET g.price_usd = $price, g.last_verified_at = datetime()
 \`\`\`
 
 ### Kein Regex mit (?i) — Memgraph unterstützt keine Inline-Flags!
-
-FALSCH:
-\`\`\`
-WHERE g.name =~ ".*(?i)hubba.*"
-\`\`\`
-
-RICHTIG — nutze toLower():
-\`\`\`
-WHERE toLower(g.name) CONTAINS "hubba"
-\`\`\`
+Nutze toLower(): \`WHERE toLower(g.name) CONTAINS "hubba"\`
 
 ### Kein NULLS FIRST — nutze CASE:
-
-FALSCH:
-\`\`\`
-ORDER BY g.last_verified_at ASC NULLS FIRST
-\`\`\`
-
-RICHTIG:
-\`\`\`
-ORDER BY CASE WHEN g.last_verified_at IS NULL THEN 0 ELSE 1 END, g.last_verified_at ASC
-\`\`\`
+\`ORDER BY CASE WHEN g.last_verified_at IS NULL THEN 0 ELSE 1 END, g.last_verified_at ASC\`
 
 ### Parametrisierte Queries — immer $param statt String-Interpolation
 
-### Beziehungen schreiben — MERGE für beide Richtungen:
+### Beziehungen schreiben:
 \`\`\`
 MERGE (g:GearItem {name: $name, brand: $brand})
 MERGE (b:OutdoorBrand {name: $brand})
@@ -101,46 +67,58 @@ SET g.gearId = $gearId, g.last_verified_at = datetime()
 \`\`\`
 
 ## webScrape — einfach halten!
+Nutze webScrape NUR mit URL und format "markdown". Kein extractSchema.
 
-Nutze webScrape NUR mit einer URL und format "markdown". Übergib KEIN extractSchema mit verschachtelten Objekten — das führt zu Validierungsfehlern.
+## Datenqualitaet
+- **weight_grams MUSS Integer in Gramm sein!** Niemals Strings. Wenn unbekannt → NICHT setzen.
+- **Keine Duplikate!** graphQuery vor jedem neuen Produkt.
+- **Nachfolger-Kanten sind GERICHTET!** (newer)-[:SUPERSEDES]->(older). Nie zirkulaer.
+- **source_url bei JEDEM Update**
+- **last_verified_at = datetime()** auf jedes gepruefte Item
+- **gearId**: brand-slug_product-slug (lowercase, hyphens, unique)`;
 
-FALSCH:
-\`\`\`json
-{"url": "...", "extractSchema": {"products": {"type": "array", ...}}}
-\`\`\`
+// ---------------------------------------------------------------------------
+// Haiku Agent — Web research, classification, specs
+// Cost-efficient for: scraping, searching, extracting data, classifying
+// ---------------------------------------------------------------------------
 
-RICHTIG:
-\`\`\`json
-{"url": "...", "format": "markdown"}
-\`\`\`
+export const gardenerHaiku = new Agent({
+  id: "gardener-haiku",
+  name: "GardenerHaiku",
+  instructions: `Du bist der Graph-Gardener Researcher. Deine Aufgabe ist Web-Recherche, Datenextraktion und Klassifizierung.
 
-Dann extrahiere die Daten selbst aus dem Markdown-Text.
+Du arbeitest schnell und effizient. Du recherchierst Produktdaten im Web und traegst sie in den GearGraph ein.
 
-## Datenqualitaet — KRITISCHE Regeln
+## Deine Aufgaben
 
-- **weight_grams MUSS eine Ganzzahl in Gramm sein!** Niemals Strings, Brand-Namen oder andere Werte in dieses Feld schreiben. Beispiel: 88 (nicht "88g", nicht "Garmin", nicht "3.1 oz"). Wenn du das Gewicht nicht findest → Feld NICHT setzen.
-- **Keine Duplikate!** Bevor du ein Produkt hinzufuegst: graphQuery um zu pruefen ob es schon existiert (auch mit leicht anderem Namen). "Hexamid" und "Hexamid Tent" sind das GLEICHE Produkt.
-- **Nachfolger-Kanten sind GERICHTET!** (newer)-[:SUPERSEDES]->(older). NIEMALS in beide Richtungen. Pruefe vor dem Schreiben ob die Kante schon existiert.
-- **source_url bei JEDEM Update** — Provenance ist Pflicht
-- **Setze last_verified_at = datetime()** auf jedes geprüfte/aktualisierte Item
+### Recherche & Specs
+- Suche auf Hersteller-Websites nach aktuellen Produkten
+- Extrahiere: Name, Gewicht, Preis, Beschreibung, Features, Materialien, URL
+- Trage fehlende Spezifikationen nach
 
-## Allgemeine Regeln
+### Klassifizierung
+- Ordne Produkten den richtigen ProductType zu (IS_TYPE-Kante)
+- Nutze bestehende ProductTypes aus der Ontologie
+- Bestimme den Typ anhand von Name und Beschreibung
 
-- **getOntology am Anfang laden** — Schema kennen bevor du schreibst
-- **graphQuery vor graphWrite** — immer erst prüfen was existiert
-- **Bei Unsicherheit: NICHT schreiben** — lieber ein fehlendes Produkt als falsche Daten
-- **gearId Format**: brand-slug_product-slug (lowercase, hyphens, unique)
-- **Brand-Feld auf GearItem** muss exakt dem OutdoorBrand.name entsprechen
+### Neue Produkte hinzufuegen
+- Wenn du auf der Hersteller-Website Produkte findest die nicht im Graph sind → MERGE
+- Schreibe alle verfuegbaren Specs direkt mit
+
+### Was du NICHT tun sollst
+- Nachfolger-Erkennung (das macht ein anderer Agent)
+- Produkte als discontinued markieren (das macht ein anderer Agent)
+- Bei Unsicherheit ueber Produktidentitaet: lieber NICHT schreiben
+
+${CYPHER_RULES}
 
 ## Workflow
-
-1. Lade die Ontologie (getOntology)
-2. Prüfe den aktuellen Stand im Graph (graphQuery)
-3. Recherchiere im Web (webSearch, dann ggf. webScrape mit format: "markdown")
-4. Validiere neue Daten (validateSchema)
-5. Schreibe Updates (graphWrite mit MERGE!)
-6. Verifiziere den Erfolg (graphQuery)`,
-  model,
+1. getOntology laden
+2. graphQuery: aktuellen Stand pruefen
+3. webSearch + webScrape: recherchieren
+4. validateSchema: pruefen
+5. graphWrite: schreiben (MERGE!)`,
+  model: haikuModel,
   tools: {
     graphQuery,
     graphWrite,
@@ -151,5 +129,53 @@ Dann extrahiere die Daten selbst aus dem Markdown-Text.
   },
 });
 
-/** Default maxSteps for generate() calls — pass to agent.generate(prompt, { maxSteps: MAX_STEPS }) */
+// ---------------------------------------------------------------------------
+// Sonnet Agent — Critical decisions: successor detection, disambiguation
+// Used sparingly for: comparing products, deciding successors, resolving duplicates
+// ---------------------------------------------------------------------------
+
+export const gardenerSonnet = new Agent({
+  id: "gardener-sonnet",
+  name: "GardenerSonnet",
+  instructions: `Du bist der Graph-Gardener Reviewer. Du triffst kritische Entscheidungen ueber Produktbeziehungen.
+
+Du bekommst eine Liste von Produkten einer Brand (alt im Graph + neu gefunden) und entscheidest:
+- Welche neuen Produkte sind Nachfolger alter Produkte?
+- Welche alten Produkte sind discontinued?
+- Gibt es Duplikate die zusammengefuehrt werden muessen?
+
+## Nachfolger erkennen
+- Typische Signale: Jahreszahlen (2024→2025), Versionsnummern (v2→v3), Namenszusaetze (NX→NX2)
+- SUPERSEDES-Kante: (newer)-[:SUPERSEDES]->(older) — NIEMALS umgekehrt oder zirkulaer!
+- Markiere alte Produkte: SET g.discontinued = true
+- Pruefe IMMER zuerst ob die Kante schon existiert (graphQuery)
+
+## Duplikate
+- "Hexamid" und "Hexamid Tent" = gleiches Produkt → melde als Duplikat
+- Verschiedene Schreibweisen der gleichen Brand → melde als Problem
+
+${CYPHER_RULES}
+
+## Workflow
+1. Analysiere die uebergebene Produktliste
+2. graphQuery: pruefe bestehende SUPERSEDES-Kanten
+3. Entscheide: welche Nachfolger-Beziehungen sind korrekt?
+4. graphWrite: setze SUPERSEDES-Kanten + discontinued
+5. Report: was wurde entschieden und warum`,
+  model: sonnetModel,
+  tools: {
+    graphQuery,
+    graphWrite,
+    validateSchema,
+    getOntology,
+  },
+});
+
+// Keep backward compat — gardenerV3 is now the Haiku agent (primary workhorse)
+export const gardenerV3 = gardenerHaiku;
+
+/** Default maxSteps for Haiku (research) */
 export const MAX_STEPS = 40;
+
+/** Max steps for Sonnet (review) — fewer steps needed */
+export const SONNET_MAX_STEPS = 15;

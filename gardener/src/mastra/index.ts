@@ -1,13 +1,13 @@
 import { Mastra } from "@mastra/core/mastra";
 import cron, { type ScheduledTask } from "node-cron";
-import { gardenerV3 } from "../agents/gardener-v3.js";
+import { gardenerHaiku, gardenerSonnet } from "../agents/gardener-v3.js";
 import { brandCategoryScan } from "../workflows/brand-category-scan.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
-  agents: { GardenerV3: gardenerV3 },
+  agents: { GardenerHaiku: gardenerHaiku, GardenerSonnet: gardenerSonnet },
   workflows: { brandCategoryScan },
   server: {
     port,
