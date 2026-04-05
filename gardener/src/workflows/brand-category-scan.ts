@@ -175,24 +175,42 @@ const pickNextTarget = createStep({
         };
       }
 
-      // --- Resolve category ---
+      // --- Count total products for this brand ---
+      const SMALL_BRAND_THRESHOLD = 20;
       let categoryName: string | undefined;
       let categorySlug: string | undefined;
 
+      const countRes = await session.run(
+        `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
+         RETURN count(g) AS totalProducts`,
+        { brandName },
+      );
+      const totalProducts = toNumber(countRes.records[0]?.get("totalProducts"));
+
       if (inputData.categoryName) {
-        const res = await session.run(
-          `MATCH (pt:ProductType {name: $name})
-           RETURN pt.name AS categoryName, pt.slug AS categorySlug`,
-          { name: inputData.categoryName },
-        );
-        if (res.records.length > 0) {
-          const rec = res.records[0]!;
-          categoryName = rec.get("categoryName") as string;
-          categorySlug = rec.get("categorySlug") as string;
+        // Explicit category requested
+        if (inputData.categoryName === "__all__" || inputData.categoryName === "__classify__") {
+          categoryName = inputData.categoryName;
+        } else {
+          const res = await session.run(
+            `MATCH (pt:ProductType {name: $name})
+             RETURN pt.name AS categoryName, pt.slug AS categorySlug`,
+            { name: inputData.categoryName },
+          );
+          if (res.records.length > 0) {
+            const rec = res.records[0]!;
+            categoryName = rec.get("categoryName") as string;
+            categorySlug = rec.get("categorySlug") as string;
+          }
         }
+      } else if (totalProducts <= SMALL_BRAND_THRESHOLD) {
+        // Small brand (≤20 products) → scan ALL products at once, no category split
+        console.log(
+          `[pick-next-target] ${brandName}: ${totalProducts} products (small brand) → full scan`,
+        );
+        categoryName = "__all__";
       } else {
-        // Find next un-audited category for this brand
-        // Uses AUDITED_CATEGORY relationship (brand-specific) instead of global ProductType property
+        // Large brand (>20 products) → find next un-audited category
         const res = await session.run(
           `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
            WITH DISTINCT pt, b
@@ -208,61 +226,55 @@ const pickNextTarget = createStep({
           categoryName = rec.get("categoryName") as string;
           categorySlug = rec.get("categorySlug") as string;
         }
+
+        if (!categoryName) {
+          // Large brand with no categories — check for unclassified products
+          const unclassifiedRes = await session.run(
+            `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
+             WHERE NOT (g)-[:IS_TYPE]->(:ProductType)
+             RETURN count(g) AS unclassifiedCount`,
+            { brandName },
+          );
+          const unclassifiedCount = toNumber(
+            unclassifiedRes.records[0]?.get("unclassifiedCount"),
+          );
+
+          if (unclassifiedCount > 0) {
+            console.log(
+              `[pick-next-target] ${brandName}: ${unclassifiedCount} unclassified products (large brand) → classify mode`,
+            );
+            categoryName = "__classify__";
+          } else {
+            // All categories audited — mark brand as fully audited
+            const writeSession = getWriteSession();
+            try {
+              await writeSession.run(
+                `MATCH (b:OutdoorBrand {name: $brandName})
+                 SET b.last_audited_at = datetime()`,
+                { brandName },
+              );
+            } finally {
+              await writeSession.close();
+            }
+            return {
+              brandName,
+              brandSlug,
+              brandWebsite,
+              skipped: true,
+              reason: "Brand fully audited",
+              cycleId,
+              startedAt,
+            };
+          }
+        }
       }
 
       if (!categoryName) {
-        // No categories found — check if this brand has unclassified products
-        const unclassifiedRes = await session.run(
-          `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
-           WHERE NOT (g)-[:IS_TYPE]->(:ProductType)
-           RETURN count(g) AS unclassifiedCount`,
-          { brandName },
-        );
-        const unclassifiedCount = toNumber(
-          unclassifiedRes.records[0]?.get("unclassifiedCount"),
-        );
-
-        if (unclassifiedCount > 0) {
-          // Brand has products without categories — classify them first
-          console.log(
-            `[pick-next-target] ${brandName}: ${unclassifiedCount} unclassified products → classify mode`,
-          );
-          return {
-            brandName,
-            brandSlug,
-            brandWebsite,
-            categoryName: "__classify__",
-            categorySlug: undefined,
-            skipped: false,
-            cycleId,
-            startedAt,
-          };
-        }
-
-        // All categories audited — mark brand as fully audited
-        const writeSession = getWriteSession();
-        try {
-          await writeSession.run(
-            `MATCH (b:OutdoorBrand {name: $brandName})
-             SET b.last_audited_at = datetime()`,
-            { brandName },
-          );
-        } finally {
-          await writeSession.close();
-        }
-
-        return {
-          brandName,
-          brandSlug,
-          brandWebsite,
-          skipped: true,
-          reason: "Brand fully audited",
-          cycleId,
-          startedAt,
-        };
+        return { skipped: true, reason: "No category resolved", cycleId, startedAt };
       }
 
-      console.log(`[pick-next-target] Selected: ${brandName} / ${categoryName}`);
+      const modeLabel = categoryName === "__all__" ? "ALL" : categoryName === "__classify__" ? "CLASSIFY" : categoryName;
+      console.log(`[pick-next-target] Selected: ${brandName} / ${modeLabel} (${totalProducts} products)`);
 
       return {
         brandName,
@@ -304,23 +316,31 @@ const loadGraphState = createStep({
     }
 
     const isClassifyMode = inputData.categoryName === "__classify__";
+    const isAllMode = inputData.categoryName === "__all__";
     const session = getReadSession();
     try {
-      // In classify mode: load ALL unclassified products for this brand (max 30)
-      // In normal mode: load products for this brand+category
-      const query = isClassifyMode
+      // __all__: load ALL products for this brand (small brands ≤20 products)
+      // __classify__: load unclassified products (max 50)
+      // normal: load products for this brand+category
+      const query = isAllMode
         ? `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
-           WHERE NOT (g)-[:IS_TYPE]->(:ProductType)
            RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
                   g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
                   g.discontinued AS discontinued, g.last_verified_at AS lastVerified
-           ORDER BY g.name
-           LIMIT 50`
-        : `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType {name: $categoryName})
-           RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
-                  g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
-                  g.discontinued AS discontinued, g.last_verified_at AS lastVerified
-           ORDER BY g.name`;
+           ORDER BY g.name`
+        : isClassifyMode
+          ? `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
+             WHERE NOT (g)-[:IS_TYPE]->(:ProductType)
+             RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
+                    g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
+                    g.discontinued AS discontinued, g.last_verified_at AS lastVerified
+             ORDER BY g.name
+             LIMIT 50`
+          : `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType {name: $categoryName})
+             RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
+                    g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
+                    g.discontinued AS discontinued, g.last_verified_at AS lastVerified
+             ORDER BY g.name`;
 
       const res = await session.run(query, {
         brandName: inputData.brandName,
@@ -431,6 +451,7 @@ const scanCategory = createStep({
     if (!mastra) throw new Error("Mastra context is required");
     const agent = mastra.getAgent("GardenerV3");
     const isClassifyMode = inputData.categoryName === "__classify__";
+    const isAllMode = inputData.categoryName === "__all__";
 
     const productList =
       inputData.products.length > 0
@@ -442,7 +463,43 @@ const scanCategory = createStep({
             .join("\n")
         : "(keine Produkte im Graph)";
 
-    const prompt = isClassifyMode
+    const prompt = isAllMode
+      ? `Prüfe ALLE Produkte der Brand "${inputData.brandName}".
+
+Brand-Website: ${inputData.brandWebsite || "nicht bekannt"}
+
+Aktuell im Graph (${inputData.productCount} Produkte):
+${productList}
+
+Deine Aufgaben:
+1. Recherchiere welche aktuellen Produkte ${inputData.brandName} anbietet
+2. Ergänze fehlende Produkte via MERGE
+3. Erkenne Nachfolger-Produkte und setze SUPERSEDES/SUPERSEDED_BY-Kanten
+4. Trage fehlende Spezifikationen nach (Gewicht, Preis, URL, Beschreibung)
+5. Setze last_verified_at = datetime() auf alle geprüften Items
+
+Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScrape zum Recherchieren.
+
+WICHTIG — Wenn du fertig bist, schreibe am Ende deiner Antwort einen strukturierten Report im folgenden EXAKTEN Format (JSON in einem Codeblock):
+
+\`\`\`json
+{
+  "productsChecked": 8,
+  "productsAdded": 2,
+  "productsUpdated": 3,
+  "successorsFound": 1,
+  "discontinuedMarked": 0,
+  "specsFilled": 5,
+  "changes": [
+    "ADDED: Product Name (gear-id) — 450g, $199",
+    "UPDATED: Product Name — weight corrected, price added",
+    "SUCCESSOR: New Model ersetzt Old Model"
+  ]
+}
+\`\`\`
+
+Jede Änderung muss als einzelne Zeile im changes-Array stehen. Prefixes: ADDED, UPDATED, SUCCESSOR, DISCONTINUED, SPECS, VERIFIED.`
+      : isClassifyMode
       ? `Klassifiziere die folgenden Produkte der Brand "${inputData.brandName}" nach ProductType.
 
 Brand-Website: ${inputData.brandWebsite || "nicht bekannt"}
@@ -585,34 +642,51 @@ const markAudited = createStep({
       };
     }
 
+    const isAllMode = inputData.categoryName === "__all__";
+    const isClassifyMode = inputData.categoryName === "__classify__";
+
     const session = getWriteSession();
     try {
-      // Mark category as audited FOR THIS BRAND (brand-specific relationship)
-      await session.run(
-        `MATCH (b:OutdoorBrand {name: $brandName}), (pt:ProductType {name: $categoryName})
-         MERGE (b)-[audit:AUDITED_CATEGORY]->(pt)
-         SET audit.at = datetime()`,
-        { brandName: inputData.brandName, categoryName: inputData.categoryName },
-      );
+      let brandFullyAudited = false;
 
-      // Check if ALL categories for this brand are now audited (within last 7 days)
-      // Simple approach: count total categories vs audited categories
-      const res = await session.run(
-        `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
-         WITH b, count(DISTINCT pt) AS totalCategories
-         OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(:ProductType)
-         WHERE audit.at > datetime() - duration('P7D')
-         WITH b, totalCategories, count(audit) AS auditedCategories
-         WHERE auditedCategories >= totalCategories
-         SET b.last_audited_at = datetime()
-         RETURN b.name AS brandAudited`,
-        { brandName: inputData.brandName },
-      );
+      if (isAllMode) {
+        // Small brand: mark entire brand as audited (no category tracking)
+        await session.run(
+          `MATCH (b:OutdoorBrand {name: $brandName})
+           SET b.last_audited_at = datetime()`,
+          { brandName: inputData.brandName },
+        );
+        brandFullyAudited = true;
+        console.log(`[mark-audited] Brand "${inputData.brandName}" fully audited (small brand, all-in-one scan)`);
+      } else if (isClassifyMode) {
+        // Classify mode: don't mark anything — products need a real scan next
+        console.log(`[mark-audited] Brand "${inputData.brandName}" classified — will be scanned by category next`);
+      } else {
+        // Normal category scan: mark this category as audited for this brand
+        await session.run(
+          `MATCH (b:OutdoorBrand {name: $brandName}), (pt:ProductType {name: $categoryName})
+           MERGE (b)-[audit:AUDITED_CATEGORY]->(pt)
+           SET audit.at = datetime()`,
+          { brandName: inputData.brandName, categoryName: inputData.categoryName },
+        );
 
-      const brandFullyAudited = res.records.length > 0;
+        // Check if ALL categories for this brand are now audited (within last 7 days)
+        const res = await session.run(
+          `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType)
+           WITH b, count(DISTINCT pt) AS totalCategories
+           OPTIONAL MATCH (b)-[audit:AUDITED_CATEGORY]->(:ProductType)
+           WHERE audit.at > datetime() - duration('P7D')
+           WITH b, totalCategories, count(audit) AS auditedCategories
+           WHERE auditedCategories >= totalCategories
+           SET b.last_audited_at = datetime()
+           RETURN b.name AS brandAudited`,
+          { brandName: inputData.brandName },
+        );
 
-      if (brandFullyAudited) {
-        console.log(`[mark-audited] Brand "${inputData.brandName}" fully audited (all categories within 7d)`);
+        brandFullyAudited = res.records.length > 0;
+        if (brandFullyAudited) {
+          console.log(`[mark-audited] Brand "${inputData.brandName}" fully audited (all categories within 7d)`);
+        }
       }
 
       return {
