@@ -211,6 +211,34 @@ const pickNextTarget = createStep({
       }
 
       if (!categoryName) {
+        // No categories found — check if this brand has unclassified products
+        const unclassifiedRes = await session.run(
+          `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
+           WHERE NOT (g)-[:IS_TYPE]->(:ProductType)
+           RETURN count(g) AS unclassifiedCount`,
+          { brandName },
+        );
+        const unclassifiedCount = toNumber(
+          unclassifiedRes.records[0]?.get("unclassifiedCount"),
+        );
+
+        if (unclassifiedCount > 0) {
+          // Brand has products without categories — classify them first
+          console.log(
+            `[pick-next-target] ${brandName}: ${unclassifiedCount} unclassified products → classify mode`,
+          );
+          return {
+            brandName,
+            brandSlug,
+            brandWebsite,
+            categoryName: "__classify__",
+            categorySlug: undefined,
+            skipped: false,
+            cycleId,
+            startedAt,
+          };
+        }
+
         // All categories audited — mark brand as fully audited
         const writeSession = getWriteSession();
         try {
@@ -275,16 +303,29 @@ const loadGraphState = createStep({
       };
     }
 
+    const isClassifyMode = inputData.categoryName === "__classify__";
     const session = getReadSession();
     try {
-      const res = await session.run(
-        `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType {name: $categoryName})
-         RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
-                g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
-                g.discontinued AS discontinued, g.last_verified_at AS lastVerified
-         ORDER BY g.name`,
-        { brandName: inputData.brandName, categoryName: inputData.categoryName },
-      );
+      // In classify mode: load ALL unclassified products for this brand (max 30)
+      // In normal mode: load products for this brand+category
+      const query = isClassifyMode
+        ? `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)
+           WHERE NOT (g)-[:IS_TYPE]->(:ProductType)
+           RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
+                  g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
+                  g.discontinued AS discontinued, g.last_verified_at AS lastVerified
+           ORDER BY g.name
+           LIMIT 30`
+        : `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType {name: $categoryName})
+           RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
+                  g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
+                  g.discontinued AS discontinued, g.last_verified_at AS lastVerified
+           ORDER BY g.name`;
+
+      const res = await session.run(query, {
+        brandName: inputData.brandName,
+        categoryName: inputData.categoryName,
+      });
 
       const products = res.records.map((rec) => ({
         name: rec.get("name") as string,
@@ -389,6 +430,7 @@ const scanCategory = createStep({
 
     if (!mastra) throw new Error("Mastra context is required");
     const agent = mastra.getAgent("GardenerV3");
+    const isClassifyMode = inputData.categoryName === "__classify__";
 
     const productList =
       inputData.products.length > 0
@@ -400,7 +442,45 @@ const scanCategory = createStep({
             .join("\n")
         : "(keine Produkte im Graph)";
 
-    const prompt = `Prüfe die Produktkategorie "${inputData.categoryName}" der Brand "${inputData.brandName}".
+    const prompt = isClassifyMode
+      ? `Klassifiziere die folgenden Produkte der Brand "${inputData.brandName}" nach ProductType.
+
+Brand-Website: ${inputData.brandWebsite || "nicht bekannt"}
+
+Diese ${inputData.productCount} Produkte haben noch keinen ProductType (IS_TYPE-Kante):
+${productList}
+
+Deine Aufgabe:
+1. Lade zuerst die Ontologie (getOntology) um die existierenden ProductTypes zu sehen
+2. Für jedes Produkt: Bestimme den passenden ProductType anhand des Namens und ggf. einer kurzen Web-Recherche
+3. Schreibe die IS_TYPE-Kante via graphWrite:
+   MERGE (g:GearItem {name: $name, brand: $brand})
+   MERGE (pt:ProductType {name: $productType})
+   MERGE (g)-[:IS_TYPE]->(pt)
+
+Regeln:
+- Verwende BESTEHENDE ProductTypes aus der Ontologie wenn möglich
+- Nur wenn kein passender existiert, erstelle einen neuen (MERGE!)
+- Produkttyp-Namen in Englisch, CamelCase mit Leerzeichen (z.B. "Sleeping Bag", "Trekking Poles")
+- Jedes Produkt braucht genau einen ProductType
+
+WICHTIG — Wenn du fertig bist, schreibe am Ende einen Report:
+
+\`\`\`json
+{
+  "productsChecked": 15,
+  "productsAdded": 0,
+  "productsUpdated": 15,
+  "successorsFound": 0,
+  "discontinuedMarked": 0,
+  "specsFilled": 0,
+  "changes": [
+    "CLASSIFIED: Product Name → ProductType (via IS_TYPE)",
+    "CLASSIFIED: Another Product → Another Type"
+  ]
+}
+\`\`\``
+      : `Prüfe die Produktkategorie "${inputData.categoryName}" der Brand "${inputData.brandName}".
 
 Brand-Website: ${inputData.brandWebsite || "nicht bekannt"}
 
