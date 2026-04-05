@@ -315,7 +315,7 @@ const loadGraphState = createStep({
                   g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
                   g.discontinued AS discontinued, g.last_verified_at AS lastVerified
            ORDER BY g.name
-           LIMIT 30`
+           LIMIT 50`
         : `MATCH (b:OutdoorBrand {name: $brandName})-[:MANUFACTURES_ITEM]->(g:GearItem)-[:IS_TYPE]->(pt:ProductType {name: $categoryName})
            RETURN g.name AS name, g.gearId AS gearId, g.weight_grams AS weight,
                   g.price_usd AS price, g.description AS description, g.productUrl AS productUrl,
