@@ -17,6 +17,33 @@ import { getReadSession, getWriteSession, toNumber } from "../lib/memgraph.js";
 import { MAX_STEPS } from "../agents/gardener-v3.js";
 
 // ---------------------------------------------------------------------------
+// Top brands — prioritized for scanning (well-known outdoor gear companies)
+// ---------------------------------------------------------------------------
+
+const TOP_BRANDS = new Set([
+  // Shelter & Tents
+  "MSR", "Big Agnes", "Hilleberg", "NEMO Equipment", "Zpacks", "Tarptent",
+  "Hyperlite Mountain Gear", "Six Moon Designs", "Sea to Summit", "Nordisk",
+  // Backpacks
+  "Osprey", "Gregory", "Deuter", "Arc'teryx", "ULA Equipment", "Granite Gear",
+  "Gossamer Gear", "Mountain Laurel Designs", "Pa'lante Packs",
+  // Sleeping
+  "Western Mountaineering", "Enlightened Equipment", "Thermarest",
+  "Feathered Friends", "Rab", "Mountain Hardwear", "Exped",
+  // Clothing
+  "Patagonia", "The North Face", "Fjällräven", "Montane", "Haglöfs",
+  "Mammut", "Salomon", "Black Diamond", "Outdoor Research",
+  // Cooking & Water
+  "Jetboil", "Sawyer", "Katadyn", "Platypus", "BRS",
+  // Electronics
+  "Garmin", "Petzl", "Black Diamond", "BioLite", "Nitecore", "Goal Zero",
+  // Footwear
+  "Hoka", "Altra", "La Sportiva", "Scarpa", "Merrell",
+  // Trekking Poles & Misc
+  "Leki", "Helinox", "Leatherman", "Victorinox",
+]);
+
+// ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
 
@@ -150,13 +177,27 @@ const pickNextTarget = createStep({
           brandWebsite = (rec.get("brandWebsite") as string) ?? undefined;
         }
       } else {
+        // Priority scoring:
+        // 1. Never-audited brands first (auditScore 0 vs 1)
+        // 2. Top brands get priority boost (topScore 0 vs 1)
+        // 3. More missing specs = higher priority (missingSpecs DESC)
+        // 4. Among audited brands: oldest audit first
         const res = await session.run(
           `MATCH (b:OutdoorBrand)-[:MANUFACTURES_ITEM]->(g:GearItem)
-           WITH b, count(g) AS productCount
-           ORDER BY CASE WHEN b.last_audited_at IS NULL THEN 0 ELSE 1 END, b.last_audited_at ASC
+           WITH b, count(g) AS productCount,
+                sum(CASE WHEN g.weight_grams IS NULL THEN 1 ELSE 0 END) +
+                sum(CASE WHEN g.price_usd IS NULL THEN 1 ELSE 0 END) +
+                sum(CASE WHEN g.description IS NULL THEN 1 ELSE 0 END) +
+                sum(CASE WHEN g.productUrl IS NULL THEN 1 ELSE 0 END) AS missingSpecs
+           ORDER BY
+             CASE WHEN b.last_audited_at IS NULL THEN 0 ELSE 1 END,
+             CASE WHEN b.name IN $topBrands THEN 0 ELSE 1 END,
+             missingSpecs DESC,
+             b.last_audited_at ASC
            LIMIT 1
            RETURN b.name AS brandName, b.slug AS brandSlug, b.website AS brandWebsite,
                   b.last_audited_at AS lastAuditedAt, productCount`,
+          { topBrands: [...TOP_BRANDS] },
         );
         if (res.records.length > 0) {
           const rec = res.records[0]!;
