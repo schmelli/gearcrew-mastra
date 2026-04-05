@@ -472,20 +472,23 @@ Aktuell im Graph (${inputData.productCount} Produkte):
 ${productList}
 
 Deine Aufgaben:
-1. Recherchiere welche aktuellen Produkte ${inputData.brandName} anbietet
-2. Ergänze fehlende Produkte via MERGE
+1. Recherchiere welche aktuellen Produkte ${inputData.brandName} anbietet — NICHT NUR die bestehenden!
+   Suche aktiv nach weiteren Produktlinien und Kategorien dieser Brand die noch nicht im Graph sind.
+   Beispiel: Wenn nur Jacken im Graph sind, aber die Brand auch Rucksäcke oder Zelte herstellt → hinzufügen!
+2. Ergänze fehlende Produkte via MERGE (bis zu 15 neue Produkte pro Scan)
 3. Erkenne Nachfolger-Produkte und setze SUPERSEDES/SUPERSEDED_BY-Kanten
 4. Trage fehlende Spezifikationen nach (Gewicht, Preis, URL, Beschreibung)
 5. Setze last_verified_at = datetime() auf alle geprüften Items
 
 Beginne mit getOntology, dann graphQuery zum Verifizieren, dann webSearch/webScrape zum Recherchieren.
+Recherchiere auf der Hersteller-Website die KOMPLETTE Produktpalette — nicht nur die bereits bekannten Produkte.
 
 WICHTIG — Wenn du fertig bist, schreibe am Ende deiner Antwort einen strukturierten Report im folgenden EXAKTEN Format (JSON in einem Codeblock):
 
 \`\`\`json
 {
   "productsChecked": 8,
-  "productsAdded": 2,
+  "productsAdded": 5,
   "productsUpdated": 3,
   "successorsFound": 1,
   "discontinuedMarked": 0,
