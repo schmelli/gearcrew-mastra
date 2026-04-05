@@ -24,8 +24,17 @@ const MAX_SKIP_RETRIES = 10; // try up to 10 brands per tick before giving up
 
 let scanTask: ScheduledTask | null = null;
 let isRunning = false;
+let consecutiveErrors = 0;
+let pausedUntil = 0;
 
 async function runScanCycle(): Promise<void> {
+  // Check if scheduler is paused (e.g. after API billing errors)
+  if (Date.now() < pausedUntil) {
+    const remainingMin = Math.round((pausedUntil - Date.now()) / 60_000);
+    console.log(`[Gardener v3] Paused for ${remainingMin} more minutes (billing/rate limit cooldown)`);
+    return;
+  }
+
   const workflow = mastra.getWorkflow("brandCategoryScan");
 
   for (let attempt = 1; attempt <= MAX_SKIP_RETRIES; attempt++) {
@@ -45,10 +54,25 @@ async function runScanCycle(): Promise<void> {
 
     if (outcome === "skipped") {
       console.log(`[Gardener v3] Skipped: ${brandName || "?"} (${duration}s) — trying next brand (${attempt}/${MAX_SKIP_RETRIES})`);
-      continue; // immediately try next brand
+      consecutiveErrors = 0;
+      continue;
     }
 
-    // completed or error — log and stop
+    if (outcome === "error") {
+      consecutiveErrors++;
+      console.error(`[Gardener v3] Error: ${brandName || "?"}/${categoryName || "?"} (${duration}s) — consecutive errors: ${consecutiveErrors}`);
+
+      if (consecutiveErrors >= 3) {
+        // 3+ errors in a row → likely a billing/rate-limit issue, pause for 30 minutes
+        pausedUntil = Date.now() + 30 * 60_000;
+        console.error(`[Gardener v3] PAUSING for 30 minutes after ${consecutiveErrors} consecutive errors`);
+        consecutiveErrors = 0;
+      }
+      return; // stop this tick, try again next tick (or after pause)
+    }
+
+    // completed — reset error counter
+    consecutiveErrors = 0;
     console.log(`[Gardener v3] ${outcome}: ${brandName || "?"}/${categoryName || "?"} (${duration}s)`);
     return;
   }

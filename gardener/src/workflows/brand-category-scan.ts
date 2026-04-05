@@ -625,7 +625,7 @@ const markAudited = createStep({
   inputSchema: scanOutputSchema,
   outputSchema: auditOutputSchema,
   execute: async ({ inputData }) => {
-    if (inputData.skipped || inputData.error) {
+    if (inputData.skipped) {
       return {
         brandName: inputData.brandName,
         categoryName: inputData.categoryName,
@@ -633,8 +633,43 @@ const markAudited = createStep({
         cycleId: inputData.cycleId,
         startedAt: inputData.startedAt,
         toolCallCount: inputData.toolCallCount,
-        skipped: inputData.skipped,
-        error: inputData.error,
+        skipped: true,
+        error: false,
+        productsChecked: inputData.productsChecked,
+        productsAdded: inputData.productsAdded,
+        productsUpdated: inputData.productsUpdated,
+        successorsFound: inputData.successorsFound,
+        discontinuedMarked: inputData.discontinuedMarked,
+        specsFilled: inputData.specsFilled,
+        changes: inputData.changes,
+      };
+    }
+
+    if (inputData.error) {
+      // Mark error brands as audited so they don't block the queue
+      // They'll be retried in the next full cycle (after all other brands)
+      if (inputData.brandName) {
+        const errSession = getWriteSession();
+        try {
+          await errSession.run(
+            `MATCH (b:OutdoorBrand {name: $brandName})
+             SET b.last_audited_at = datetime()`,
+            { brandName: inputData.brandName },
+          );
+          console.log(`[mark-audited] Error brand "${inputData.brandName}" marked as audited to prevent queue blocking`);
+        } finally {
+          await errSession.close();
+        }
+      }
+      return {
+        brandName: inputData.brandName,
+        categoryName: inputData.categoryName,
+        brandFullyAudited: false,
+        cycleId: inputData.cycleId,
+        startedAt: inputData.startedAt,
+        toolCallCount: inputData.toolCallCount,
+        skipped: false,
+        error: true,
         productsChecked: inputData.productsChecked,
         productsAdded: inputData.productsAdded,
         productsUpdated: inputData.productsUpdated,
