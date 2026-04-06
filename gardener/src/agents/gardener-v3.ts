@@ -98,8 +98,41 @@ Du arbeitest schnell und effizient. Du recherchierst Produktdaten im Web und tra
 
 ### Klassifizierung
 - Ordne Produkten den richtigen ProductType zu (IS_TYPE-Kante)
-- Nutze bestehende ProductTypes aus der Ontologie
+- Du MUSST einen der folgenden 154 gültigen ProductType-Namen verwenden — KEINE anderen!
 - Bestimme den Typ anhand von Name und Beschreibung
+
+#### Gültige ProductType-Namen (exakte Schreibweise verwenden!):
+1-Person 3-Season Tents, 2-Person 3-Season Tents, 3+ Person 3-Season Tents, 3-Season Tent Accessories,
+1-Person 4-Season Tents, 2-Person 4-Season Tents, 3+ Person 4-Season Tents, 4-Season Tent Accessories,
+Family Camping Tents, Family Tent Accessories, Flat Tarps, Shaped Tarps, Tarp Accessories,
+Bivy Sacks, Emergency Shelters, Summer Down Sleeping Bags, 3-Season Down Sleeping Bags,
+Winter Down Sleeping Bags, Summer Synthetic Sleeping Bags, 3-Season Synthetic Sleeping Bags,
+Winter Synthetic Sleeping Bags, Down Quilts, Synthetic Quilts, Underquilts,
+Inflatable Sleeping Pads, Foam Sleeping Pads, Camp Pillows, Sleep Accessories,
+Camping Hammocks, Hammock Accessories, Rain Jackets, Insulated Jackets, Softshell Jackets,
+Wind Jackets, Vests, Ponchos, Fleece Jackets, Insulated Mid-Layers, Long-Sleeve Shirts,
+Base Layer Tops, Base Layer Bottoms, Sun Protection Clothing, Hiking Pants, Hiking Shorts,
+Rain Pants, Insulated Pants, Rain Skirts, Hiking Boots, Hiking Shoes, Trail Running Shoes,
+Camp Shoes, Winter Boots, Footwear Accessories, Sun Hats, Warm Hats, Neck Gaiters,
+Hiking Gloves, Insulated Gloves, Shell Gloves, Hiking Socks, Liner Socks, Winter Socks,
+Underwear, Sports Bras, Canister Stoves, Alcohol Stoves, Liquid Fuel Stoves, Solid Fuel Stoves,
+Integrated Cooking Systems, Stormcooker Systems, Pots & Pans, Mugs & Cups, Plates & Bowls,
+Cooking Utensils, Stove Accessories, Bear Canisters, Food Bags, Food Storage Containers,
+Daypacks, Backpacking Packs, Trekking Packs, Ultralight Packs, Specialty Packs,
+Duffel Bags, Travel Bags, Tote Bags, Stuff Sacks, Pack Organizers, Pack Accessories,
+Headlamps, Lanterns, Flashlights, Power Banks, Solar Chargers, Charging Accessories,
+Satellite Communicators, Two-Way Radios, Water Filters, Water Purifiers, Water Bottles,
+Hydration Reservoirs, Insulated Bottles, First Aid Kits, Sun Protection, Insect Protection,
+Health Supplies, Camp Towels, Hygiene Accessories, GPS Devices, Compasses,
+Maps & Guidebooks, Binoculars, Monoculars, Flatwater Packrafts, Whitewater Packrafts,
+Packrafting Paddles, Packrafting Accessories, Inflatable Kayaks, Kayak Paddles,
+Kayak Accessories, Life Jackets, Rescue Equipment, Fire Starters, Survival Kits,
+Emergency Signaling, Avalanche Safety Gear, Bear Protection, Ski Boots, Ski Bindings,
+Touring Skis, Splitboards, Ski Accessories, Camp Chairs, Camp Tables, Repair Kits,
+Care Products, Knives, Multi-Tools, Axes & Hatchets, Cord & Fasteners, Dog Gear,
+Travel Accessories, Trekking Poles, Ice Axes, Crampons, Snowshoes, Batteries,
+Drink Mixes, Freeze-Dried Meals, Trail Snacks, Camp Cooking Ingredients,
+Canister Gas, Liquid Fuel, Solid Fuel
 
 ### Neue Produkte hinzufuegen
 - Wenn du auf der Hersteller-Website Produkte findest die nicht im Graph sind → MERGE
