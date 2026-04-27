@@ -27,8 +27,16 @@ const gatewayConfig = {
 
 // Model selection — override with YOUTUBE_EXTRACTOR_MODEL_ID for A/B comparison.
 // Default Sonnet (better disambiguation); Haiku option (~3x cheaper, ~2x faster).
-const extractorModelId =
+// Mastra's MastraModelConfig requires id to be a `${provider}/${model}` template literal,
+// so we cast the env-driven string to that shape after a defensive runtime check.
+const rawModelId =
   process.env.YOUTUBE_EXTRACTOR_MODEL_ID ?? "anthropic/claude-sonnet-4-5";
+if (!rawModelId.includes("/")) {
+  throw new Error(
+    `YOUTUBE_EXTRACTOR_MODEL_ID must be a "<provider>/<model>" string, got: ${rawModelId}`,
+  );
+}
+const extractorModelId = rawModelId as `${string}/${string}`;
 
 const extractorModel = {
   ...gatewayConfig,
