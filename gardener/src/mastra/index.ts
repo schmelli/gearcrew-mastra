@@ -1,14 +1,20 @@
 import { Mastra } from "@mastra/core/mastra";
 import cron, { type ScheduledTask } from "node-cron";
 import { gardenerHaiku, gardenerSonnet } from "../agents/gardener-v3.js";
+import { youtubeGearExtractor } from "../agents/youtube-gear-extractor.js";
 import { brandCategoryScan } from "../workflows/brand-category-scan.js";
+import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
-  agents: { GardenerHaiku: gardenerHaiku, GardenerSonnet: gardenerSonnet },
-  workflows: { brandCategoryScan },
+  agents: {
+    GardenerHaiku: gardenerHaiku,
+    GardenerSonnet: gardenerSonnet,
+    YoutubeGearExtractor: youtubeGearExtractor,
+  },
+  workflows: { brandCategoryScan, youtubePlaylistIngest },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,

@@ -19,6 +19,7 @@
     "mastra": "~0.18.9",
     "neo4j-driver": "^5.17.0",
     "node-cron": "^4.2.1",
+    "p-limit": "^7.3.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
