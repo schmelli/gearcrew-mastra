@@ -25,10 +25,17 @@ const gatewayConfig = {
   apiKey: process.env.AI_GATEWAY_API_KEY ?? "",
 };
 
-const sonnetModel = {
+// Model selection — override with YOUTUBE_EXTRACTOR_MODEL_ID for A/B comparison.
+// Default Sonnet (better disambiguation); Haiku option (~3x cheaper, ~2x faster).
+const extractorModelId =
+  process.env.YOUTUBE_EXTRACTOR_MODEL_ID ?? "anthropic/claude-sonnet-4-5";
+
+const extractorModel = {
   ...gatewayConfig,
-  id: "anthropic/claude-sonnet-4-5" as const,
+  id: extractorModelId,
 };
+
+console.log(`[youtube-gear-extractor] using model: ${extractorModelId}`);
 
 // ---------------------------------------------------------------------------
 // Agent
@@ -88,7 +95,7 @@ End your response with a JSON summary on its own line:
 
 Use lowConfidenceFlags to surface ambiguities (e.g. "Could not disambiguate
 'BD Storm' between Black Diamond Storm Headlamp and Storm jacket").`,
-  model: sonnetModel,
+  model: extractorModel,
   tools: {
     graphQuery,
     graphWrite,
