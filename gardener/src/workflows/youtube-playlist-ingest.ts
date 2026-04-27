@@ -15,6 +15,11 @@ import { z } from "zod";
 import pLimit from "p-limit";
 import { getReadSession, toNumber } from "../lib/memgraph.js";
 import {
+  getCompletedVideoIds,
+  upsertProcessedVideo,
+  type ProcessedVideoUpsert,
+} from "../lib/supabase.js";
+import {
   fetchPlaylistVideos,
   type PlaylistVideo,
 } from "../tools/youtube-data-api.js";
@@ -142,6 +147,21 @@ const filterAlreadyExtracted = createStep({
       };
     }
 
+    // Supabase completion check is best-effort — if it fails we fall back to
+    // the Memgraph version check alone rather than blocking the pipeline.
+    let completed = new Set<string>();
+    try {
+      completed = await getCompletedVideoIds();
+      console.log(
+        `[youtube-ingest] Supabase: ${completed.size} videos already marked completed`,
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[youtube-ingest] Supabase completion lookup failed (continuing without it): ${reason}`,
+      );
+    }
+
     const session = getReadSession();
     let skippedCount = 0;
     const videosToProcess: PlaylistVideo[] = [];
@@ -155,7 +175,7 @@ const filterAlreadyExtracted = createStep({
           { url },
         );
         const version = toNumber(res.records[0]?.get("version"));
-        if (version >= 2) {
+        if (version >= 2 || completed.has(video.videoId)) {
           skippedCount += 1;
         } else {
           videosToProcess.push(video);
@@ -166,7 +186,7 @@ const filterAlreadyExtracted = createStep({
     }
 
     console.log(
-      `[youtube-ingest] After filter: ${videosToProcess.length} to process, ${skippedCount} skipped (already at v2)`,
+      `[youtube-ingest] After filter: ${videosToProcess.length} to process, ${skippedCount} skipped (already at v2 or Supabase=completed)`,
     );
 
     return {
@@ -187,6 +207,63 @@ interface VideoOutcome {
   creditsUsed: number;
   durationSeconds: number;
   reason?: string;
+}
+
+/**
+ * Best-effort Supabase tracking — never throws. The video pipeline must
+ * keep running even if processed_videos writes are broken.
+ */
+async function safeTrack(row: ProcessedVideoUpsert): Promise<void> {
+  try {
+    await upsertProcessedVideo(row);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[youtube-ingest] Supabase track failed for ${row.youtube_video_id} (status=${row.processing_status}): ${reason}`,
+    );
+  }
+}
+
+/**
+ * Parse the agent's response text for the JSON summary block emitted at the
+ * end of extraction. We look for any { ... "itemsCreated": N ... "opinionsAdded": M ... }
+ * shape — if it can't be parsed, we return zeros rather than crashing the run.
+ */
+function parseExtractionCounts(text: string | undefined): {
+  gear_items_found: number;
+  insights_found: number;
+} {
+  if (!text) return { gear_items_found: 0, insights_found: 0 };
+
+  // Try fenced ```json blocks first, then fall back to any { ... } chunk
+  const candidates: string[] = [];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/g);
+  if (fenced) {
+    for (const block of fenced) {
+      candidates.push(block.replace(/```(?:json)?\s*/, "").replace(/```$/, ""));
+    }
+  }
+  // last { ... } in the text
+  const lastBrace = text.lastIndexOf("{");
+  if (lastBrace >= 0) candidates.push(text.slice(lastBrace));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate.trim()) as Record<string, unknown>;
+      const items = Number(parsed.itemsCreated);
+      const opinions = Number(parsed.opinionsAdded);
+      if (Number.isFinite(items) || Number.isFinite(opinions)) {
+        return {
+          gear_items_found: Number.isFinite(items) ? items : 0,
+          insights_found: Number.isFinite(opinions) ? opinions : 0,
+        };
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return { gear_items_found: 0, insights_found: 0 };
 }
 
 const processVideos = createStep({
@@ -227,6 +304,17 @@ const processVideos = createStep({
         }
 
         const url = `https://www.youtube.com/watch?v=${video.videoId}`;
+
+        // Mark as processing in Supabase — best-effort, never blocks pipeline.
+        await safeTrack({
+          youtube_video_id: video.videoId,
+          title: video.title,
+          channel_name: video.channelTitle,
+          duration_seconds: video.durationSeconds,
+          thumbnail_url: video.thumbnailUrl,
+          processing_status: "processing",
+        });
+
         try {
           // --- Transcribe ---
           let transcription: TranscriptionResult = await createTranscription(url);
@@ -245,6 +333,17 @@ const processVideos = createStep({
           if (transcription.status === "failed" || !transcription.transcription) {
             const reason = `Transcription failed: ${transcription.error ?? "no transcript content"} (${transcription.errorCode ?? "unknown"})`;
             console.error(`[youtube-ingest] ${video.videoId}: ${reason}`);
+            await safeTrack({
+              youtube_video_id: video.videoId,
+              title: video.title,
+              channel_name: video.channelTitle,
+              duration_seconds: transcription.duration ?? video.durationSeconds,
+              thumbnail_url: video.thumbnailUrl,
+              tubeonai_uuid: transcription.uuid,
+              processing_status: "failed",
+              extraction_summary: reason,
+              processed_at: new Date().toISOString(),
+            });
             return {
               videoId: video.videoId,
               succeeded: false,
@@ -318,16 +417,61 @@ instructions. Do NOT emit the summary before completing the writes.`;
             `[youtube-ingest] ${video.videoId}: agent finished — toolCalls=${toolCallCount}`,
           );
 
+          const succeeded = toolCallCount > 0;
+          const counts = parseExtractionCounts(
+            (response as { text?: string }).text,
+          );
+          const extractorModel =
+            process.env.YOUTUBE_EXTRACTOR_MODEL ?? "extractor";
+
+          if (succeeded) {
+            await safeTrack({
+              youtube_video_id: video.videoId,
+              title: video.title,
+              channel_name: video.channelTitle,
+              duration_seconds: transcription.duration ?? video.durationSeconds,
+              thumbnail_url: video.thumbnailUrl,
+              tubeonai_uuid: transcription.uuid,
+              processing_status: "completed",
+              gear_items_found: counts.gear_items_found,
+              insights_found: counts.insights_found,
+              extraction_summary: `Extracted via ${extractorModel} — ${toolCallCount} tool calls`,
+              processed_at: new Date().toISOString(),
+            });
+          } else {
+            await safeTrack({
+              youtube_video_id: video.videoId,
+              title: video.title,
+              channel_name: video.channelTitle,
+              duration_seconds: transcription.duration ?? video.durationSeconds,
+              thumbnail_url: video.thumbnailUrl,
+              tubeonai_uuid: transcription.uuid,
+              processing_status: "failed",
+              extraction_summary: "agent emitted no tool calls",
+              processed_at: new Date().toISOString(),
+            });
+          }
+
           return {
             videoId: video.videoId,
-            succeeded: toolCallCount > 0,
+            succeeded,
             creditsUsed: transcription.creditsUsed,
             durationSeconds: transcription.duration ?? 0,
-            reason: toolCallCount === 0 ? "agent emitted no tool calls" : undefined,
+            reason: succeeded ? undefined : "agent emitted no tool calls",
           };
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           console.error(`[youtube-ingest] ${video.videoId}: ${reason}`);
+          await safeTrack({
+            youtube_video_id: video.videoId,
+            title: video.title,
+            channel_name: video.channelTitle,
+            duration_seconds: video.durationSeconds,
+            thumbnail_url: video.thumbnailUrl,
+            processing_status: "failed",
+            extraction_summary: reason,
+            processed_at: new Date().toISOString(),
+          });
           return {
             videoId: video.videoId,
             succeeded: false,
