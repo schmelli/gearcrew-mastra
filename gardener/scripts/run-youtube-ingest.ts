@@ -85,15 +85,18 @@ Options:
   process.exit(code);
 }
 
+const DEFAULT_PLAYLIST_ID = "PLy6TtegcnZj84nCIzqtZcWlNHD6sQAJqj";
+
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
 
-  // Build the workflow input — let the schema apply defaults for missing fields.
+  // Mastra's `run.start({inputData})` does not apply zod schema `.default()` —
+  // we must pass concrete values here. Optional fields stay omitted.
   const inputData: Record<string, unknown> = {
+    playlistId: cli.playlistId ?? DEFAULT_PLAYLIST_ID,
     dryRun: cli.dryRun,
     force: cli.force,
   };
-  if (cli.playlistId) inputData.playlistId = cli.playlistId;
   if (cli.limit !== undefined) inputData.limit = cli.limit;
   if (cli.maxCredits !== undefined) inputData.maxCredits = cli.maxCredits;
 
