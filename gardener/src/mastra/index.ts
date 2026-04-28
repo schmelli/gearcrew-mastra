@@ -8,6 +8,7 @@ import { brandDedup } from "../workflows/brand-dedup.js";
 import { typeDedup } from "../workflows/type-dedup.js";
 import { autoTypingFlash } from "../workflows/auto-typing.js";
 import { enrichmentLite } from "../workflows/enrichment-lite.js";
+import { enrichmentPremium } from "../workflows/enrichment-premium.js";
 import { successorDetection } from "../workflows/successor-detection.js";
 import { specNormalization } from "../workflows/spec-normalization.js";
 import { closeDriver } from "../lib/memgraph.js";
@@ -25,6 +26,10 @@ export const mastra = new Mastra({
   // autoTypingFlash: manual-trigger only (no scheduler) per CONTEXT D-14 — production apply-runs require human-gating ($10 cost cap).
   // enrichmentLite: manual-trigger only (no scheduler) per Phase 09 GEA-1086+1087 scope-reduced launch flow ($5 combined cost cap).
   //                 Round-robin priority + per-type cooldown enabled by default (quick-260428-jux).
+  // enrichmentPremium: manual-trigger only (registered quick-260428-ke7). $10 cost cap.
+  //                 Description (Gemini Flash, 200-400 words) + insights (Memgraph
+  //                 VideoSource transcripts -> tagged Insight nodes via HAS_INSIGHT/DERIVED_FROM).
+  //                 Scheduler + cron defer to next deployment task.
   // successorDetection: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
   // specNormalization: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
   // productDiscovery + brandEnrichment: NOT registered — both still use legacy `new Workflow()` v2 API.
@@ -36,6 +41,7 @@ export const mastra = new Mastra({
     typeDedup,
     autoTypingFlash,
     enrichmentLite,
+    enrichmentPremium,
     successorDetection,
     specNormalization,
   },
