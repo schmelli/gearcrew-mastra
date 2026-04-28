@@ -331,10 +331,12 @@ export async function generateDescriptionWithGemini(
   const outputTokens = usage.completion_tokens ?? 0;
   const cost = costCents(inputTokens, outputTokens);
 
-  // Word-count guard. We accept a slightly looser range than the prompt asks
-  // (150..500) because Gemini frequently misses the upper bound by ~10%.
+  // Word-count guard. Loosened from 150..500 → 80..600 because Gemini Flash
+  // frequently produces concise 80-120 word descriptions for simple items
+  // (stuff bags, pots, small accessories) that are still high-quality. Below
+  // 80 the description is too thin to be useful; above 600 it's verbose fluff.
   const words = validated.description.trim().split(/\s+/).filter(Boolean).length;
-  if (words < 150 || words > 500) {
+  if (words < 80 || words > 600) {
     return {
       item_id: item.id,
       description: null,
