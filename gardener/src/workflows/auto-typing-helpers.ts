@@ -49,6 +49,12 @@ export interface UntypedItem {
   description: string | null;
 }
 
+// Schema-drift note: live gear_items has no `category_legacy` column. We read
+// `subcategory_id` as the closest available "legacy" hint and surface it via
+// the same field name to the LLM (UUID is a poor signal but better than nothing
+// for items that lack rich descriptions). Workflow could be extended to hydrate
+// labels for these UUIDs in a later iteration.
+
 export interface Candidate {
   id: string;
   name: string;
@@ -92,7 +98,7 @@ export async function fetchUntypedItems(cap: number): Promise<UntypedItem[]> {
     const pageSize = Math.min(PAGE, remaining);
     const { data, error } = await supa
       .from("gear_items")
-      .select("id, name, brand, category_legacy, weight_grams, description")
+      .select("id, name, brand, subcategory_id, weight_grams, description")
       .is("product_type_id", null)
       .range(from, from + pageSize - 1);
 
@@ -102,8 +108,23 @@ export async function fetchUntypedItems(cap: number): Promise<UntypedItem[]> {
       );
     }
     if (!data || data.length === 0) break;
-    for (const row of data as UntypedItem[]) {
-      items.push(row);
+    interface RawGearRow {
+      id: string;
+      name: string;
+      brand: string | null;
+      subcategory_id: string | null;
+      weight_grams: number | null;
+      description: string | null;
+    }
+    for (const row of data as RawGearRow[]) {
+      items.push({
+        id: row.id,
+        name: row.name,
+        brand: row.brand,
+        category_legacy: row.subcategory_id,
+        weight_grams: row.weight_grams,
+        description: row.description,
+      });
       if (items.length >= cap) break;
     }
     if (data.length < pageSize) break;
