@@ -8,6 +8,8 @@ import { brandDedup } from "../workflows/brand-dedup.js";
 import { typeDedup } from "../workflows/type-dedup.js";
 import { autoTypingFlash } from "../workflows/auto-typing.js";
 import { enrichmentLite } from "../workflows/enrichment-lite.js";
+import { successorDetection } from "../workflows/successor-detection.js";
+import { specNormalization } from "../workflows/spec-normalization.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -22,7 +24,21 @@ export const mastra = new Mastra({
   // typeDedup: manual-trigger only (no scheduler) per CONTEXT D-12 — type-merge happens Gearshack-side via migration.
   // autoTypingFlash: manual-trigger only (no scheduler) per CONTEXT D-14 — production apply-runs require human-gating ($10 cost cap).
   // enrichmentLite: manual-trigger only (no scheduler) per Phase 09 GEA-1086+1087 scope-reduced launch flow ($5 combined cost cap).
-  workflows: { brandCategoryScan, youtubePlaylistIngest, brandDedup, typeDedup, autoTypingFlash, enrichmentLite },
+  //                 Round-robin priority + per-type cooldown enabled by default (quick-260428-jux).
+  // successorDetection: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
+  // specNormalization: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
+  // productDiscovery + brandEnrichment: NOT registered — both still use legacy `new Workflow()` v2 API.
+  //                 v2->v3 retrofit is its own task; defer to post-launch (quick-260428-jux scope decision).
+  workflows: {
+    brandCategoryScan,
+    youtubePlaylistIngest,
+    brandDedup,
+    typeDedup,
+    autoTypingFlash,
+    enrichmentLite,
+    successorDetection,
+    specNormalization,
+  },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,
