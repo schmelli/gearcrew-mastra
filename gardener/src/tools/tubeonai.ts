@@ -10,7 +10,7 @@
 const BASE_URL = "https://app.tubeonai.com/api/developer/v1";
 const RATE_LIMIT_PER_MINUTE = 60;
 const DEFAULT_POLL_INTERVAL_MS = 8_000;
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (long videos can take 5-10+ min to transcribe)
 
 // ---------------------------------------------------------------------------
 // Types
