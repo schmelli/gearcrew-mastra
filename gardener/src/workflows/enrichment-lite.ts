@@ -47,6 +47,12 @@ import {
   type ItemForWeight,
   type ItemForImage,
 } from "./enrichment-lite-helpers.js";
+import {
+  fetchItemsForWeightEnrichment,
+  fetchItemsForImageEnrichment,
+  touchWeightEnrichmentTimestamp,
+  touchImageEnrichmentTimestamp,
+} from "./enrichment-lite-roundrobin.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -78,6 +84,13 @@ const triggerSchema = z.object({
     .nonnegative()
     .default(DEFAULT_INTER_REQUEST_DELAY_MS),
   dry_run_test: z.boolean().default(false),
+  // Round-robin (quick-260428-jux): "roundrobin" (default) prioritizes Top-50
+  // brands first and respects per-type cooldowns (7d Top-50 / 30d long-tail).
+  // "missing-only" preserves the original launch-flow behavior (re-pick any
+  // item with NULL target field on every run) for back-compat manual triggers.
+  selection_strategy: z
+    .enum(["roundrobin", "missing-only"])
+    .default("roundrobin"),
 });
 
 const sampleWeightSchema = z.object({
@@ -251,6 +264,9 @@ async function runWeightEnrichment(
           workflowRunId,
         );
         if (gap.ok) acc.gaps += 1;
+        // Round-robin (quick-260428-jux): advance cooldown so next batch
+        // does not immediately re-pick this item.
+        await touchWeightEnrichmentTimestamp(item.id, workflowRunId);
       }
     } else {
       bucket = "failed";
@@ -263,6 +279,7 @@ async function runWeightEnrichment(
           workflowRunId,
         );
         if (gap.ok) acc.gaps += 1;
+        await touchWeightEnrichmentTimestamp(item.id, workflowRunId);
       }
     }
 
@@ -344,6 +361,8 @@ async function runImageEnrichment(
           workflowRunId,
         );
         if (gap.ok) acc.gaps += 1;
+        // Round-robin (quick-260428-jux): advance cooldown.
+        await touchImageEnrichmentTimestamp(item.id, workflowRunId);
       }
     } else {
       const result = await fetchOgImage(item.product_url);
@@ -388,6 +407,8 @@ async function runImageEnrichment(
             workflowRunId,
           );
           if (gap.ok) acc.gaps += 1;
+          // Round-robin (quick-260428-jux): advance cooldown.
+          await touchImageEnrichmentTimestamp(item.id, workflowRunId);
         }
       }
     }
@@ -465,7 +486,10 @@ const routeAndExecute = createStep({
       samples: [],
     };
     if (inputData.target === "weight" || inputData.target === "both") {
-      const items = await fetchItemsMissingWeight(inputData.limit);
+      const items =
+        inputData.selection_strategy === "roundrobin"
+          ? await fetchItemsForWeightEnrichment(inputData.limit)
+          : await fetchItemsMissingWeight(inputData.limit);
       const out = await runWeightEnrichment(
         items,
         inputData,
@@ -489,7 +513,10 @@ const routeAndExecute = createStep({
       !aborted &&
       (inputData.target === "image" || inputData.target === "both")
     ) {
-      const items = await fetchItemsMissingImage(inputData.limit);
+      const items =
+        inputData.selection_strategy === "roundrobin"
+          ? await fetchItemsForImageEnrichment(inputData.limit)
+          : await fetchItemsMissingImage(inputData.limit);
       const out = await runImageEnrichment(
         items,
         inputData,

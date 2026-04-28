@@ -167,10 +167,15 @@ export async function applyWeightUpdate(
 ): Promise<ApplyResult> {
   const supa = getSupabase();
 
-  // Step 1: UPDATE gear_items (idempotent guard)
+  // Step 1: UPDATE gear_items (idempotent guard).
+  // Round-robin contract (quick-260428-jux): also stamp last_weight_enriched_at
+  // so the cooldown advances on every successful weight write.
   const { data: updated, error: updErr } = await supa
     .from("gear_items")
-    .update({ weight_grams: weightGrams })
+    .update({
+      weight_grams: weightGrams,
+      last_weight_enriched_at: new Date().toISOString(),
+    })
     .eq("id", itemId)
     .is("weight_grams", null)
     .select("id");
@@ -230,11 +235,14 @@ export async function applyImageUpdate(
 ): Promise<ApplyResult> {
   const supa = getSupabase();
 
+  // Round-robin contract (quick-260428-jux): stamp last_image_enriched_at so
+  // the cooldown advances on every successful image write.
   const { data: updated, error: updErr } = await supa
     .from("gear_items")
     .update({
       primary_image_url: imageUrl,
       image_source_url: sourceUrl,
+      last_image_enriched_at: new Date().toISOString(),
     })
     .eq("id", itemId)
     .is("primary_image_url", null)
