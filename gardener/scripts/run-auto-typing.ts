@@ -30,6 +30,7 @@ interface CliArgs {
   confidenceThreshold: number;
   limit?: number;
   dryRunTest: boolean;
+  retypeAll: boolean;
 }
 
 const DEFAULT_BATCH_SIZE = 50;
@@ -44,6 +45,7 @@ function parseArgs(argv: string[]): CliArgs {
     maxCostCents: DEFAULT_MAX_COST_CENTS,
     confidenceThreshold: DEFAULT_CONFIDENCE_THRESHOLD,
     dryRunTest: false,
+    retypeAll: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -115,6 +117,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "--dry-run-test":
         args.dryRunTest = true;
         break;
+      case "--retype-all":
+        args.retypeAll = true;
+        break;
       case "--help":
       case "-h":
         printHelpAndExit(0);
@@ -144,6 +149,7 @@ Optional:
   --limit <n>                cap total items
   --confidence-threshold <n> default ${DEFAULT_CONFIDENCE_THRESHOLD}
   --dry-run-test             skip ALL Supabase writes (offline)
+  --retype-all               re-classify ALL gear_items (not just product_type_id IS NULL)
   --help                     show this help`;
   console.log(help);
   process.exit(code);
@@ -233,6 +239,7 @@ async function main(): Promise<void> {
     max_cost_cents: number;
     confidence_threshold: number;
     dry_run_test: boolean;
+    retype_all: boolean;
     limit?: number;
   }
 
@@ -243,6 +250,7 @@ async function main(): Promise<void> {
     max_cost_cents: cli.maxCostCents,
     confidence_threshold: cli.confidenceThreshold,
     dry_run_test: cli.dryRunTest,
+    retype_all: cli.retypeAll,
   };
   if (cli.limit !== undefined) inputData.limit = cli.limit;
 

@@ -84,10 +84,17 @@ export interface BatchAccumulator {
 // ---------------------------------------------------------------------------
 
 /**
- * Read up to `cap` gear_items rows where product_type_id IS NULL. Page through
- * to avoid PostgREST's default 1000-row cap.
+ * Read up to `cap` gear_items rows. By default filters to `product_type_id IS NULL`.
+ * When `retypeAll=true`, returns ALL gear_items regardless of existing type — used for
+ * full re-classification after Type-Dedup migration runs (or when current types are
+ * known to be stale/inconsistent).
+ *
+ * Pages through to avoid PostgREST's default 1000-row cap.
  */
-export async function fetchUntypedItems(cap: number): Promise<UntypedItem[]> {
+export async function fetchUntypedItems(
+  cap: number,
+  retypeAll: boolean = false,
+): Promise<UntypedItem[]> {
   const supa = getSupabase();
   const items: UntypedItem[] = [];
   const PAGE = 1000;
@@ -96,11 +103,14 @@ export async function fetchUntypedItems(cap: number): Promise<UntypedItem[]> {
   while (items.length < cap) {
     const remaining = cap - items.length;
     const pageSize = Math.min(PAGE, remaining);
-    const { data, error } = await supa
+    let query = supa
       .from("gear_items")
       .select("id, name, brand, subcategory_id, weight_grams, description")
-      .is("product_type_id", null)
       .range(from, from + pageSize - 1);
+    if (!retypeAll) {
+      query = query.is("product_type_id", null);
+    }
+    const { data, error } = await query;
 
     if (error) {
       throw new Error(

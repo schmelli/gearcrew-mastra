@@ -66,6 +66,7 @@ const triggerSchema = z.object({
     .default(DEFAULT_CONFIDENCE_THRESHOLD),
   limit: z.number().int().positive().optional(),
   dry_run_test: z.boolean().default(false),
+  retype_all: z.boolean().default(false),
 });
 
 const outputSchema = z.object({
@@ -106,7 +107,7 @@ const routeAndExecute = createStep({
       inputData.limit ?? Number.MAX_SAFE_INTEGER,
       inputData.max_batches * inputData.batch_size,
     );
-    const items = await fetchUntypedItems(cap);
+    const items = await fetchUntypedItems(cap, inputData.retype_all ?? false);
 
     if (items.length === 0) {
       console.warn(
