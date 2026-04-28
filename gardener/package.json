@@ -19,7 +19,10 @@
     "type-dedup:dry-run-test": "tsx scripts/run-type-dedup.ts --mode dry-run --dry-run-test",
     "auto-typing:dry-run-test": "tsx scripts/run-auto-typing.ts --mode dry-run --dry-run-test",
     "auto-typing:dry-run": "tsx scripts/run-auto-typing.ts --mode dry-run",
-    "auto-typing:apply": "tsx scripts/run-auto-typing.ts --mode apply"
+    "auto-typing:apply": "tsx scripts/run-auto-typing.ts --mode apply",
+    "enrichment-lite:dry-run-test": "tsx scripts/run-enrichment-lite.ts --mode dry-run --dry-run-test",
+    "enrichment-lite:dry-run": "tsx scripts/run-enrichment-lite.ts --mode dry-run",
+    "enrichment-lite:apply": "tsx scripts/run-enrichment-lite.ts --mode apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
