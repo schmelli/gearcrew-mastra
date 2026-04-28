@@ -13,7 +13,7 @@
 import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import pLimit from "p-limit";
-import { getReadSession, toNumber } from "../lib/memgraph.js";
+import { getReadSession, getWriteSession, toNumber } from "../lib/memgraph.js";
 import {
   getCompletedVideoIds,
   upsertProcessedVideo,
@@ -366,8 +366,43 @@ const processVideos = createStep({
             };
           }
 
-          // --- Extract gear via agent ---
+          // --- Pre-write VideoSource with transcript_text (deterministic, idempotent) ---
+          // The agent may also MERGE this node when extracting gear; both writes are
+          // idempotent (MERGE on url) and the SET clauses don't conflict.
+          // This guarantees transcript_text is cached even if the agent fails downstream.
           const sanitizedTranscript = sanitizeWebContent(transcription.transcription);
+          {
+            const writeSession = getWriteSession();
+            try {
+              await writeSession.run(
+                `MERGE (v:VideoSource {url: $url})
+                 SET v.title = $title,
+                     v.channel = $channel,
+                     v.duration_seconds = $duration,
+                     v.transcript_text = $transcript,
+                     v.transcript_word_count = $wordCount,
+                     v.transcript_language = $language,
+                     v.tubeonai_uuid = $uuid,
+                     v.transcript_cached_at = datetime(),
+                     v.extraction_version = 2,
+                     v.extracted_from_video_id = $videoId`,
+                {
+                  url,
+                  title: video.title,
+                  channel: video.channelTitle,
+                  duration: transcription.duration ?? video.durationSeconds ?? 0,
+                  transcript: sanitizedTranscript,
+                  wordCount: transcription.wordCount ?? 0,
+                  language: transcription.language ?? "unknown",
+                  uuid: transcription.uuid,
+                  videoId: video.videoId,
+                },
+              );
+            } finally {
+              await writeSession.close();
+            }
+          }
+
           const prompt = `Extract gear data from this YouTube video and WRITE it into the GearGraph.
 
 Video metadata:
