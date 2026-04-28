@@ -90,6 +90,11 @@ export async function applyDescriptionUpdate(
     return { ok: false, reason: "description_already_long_enough" };
   }
 
+  // We rely on the JS-side pre-read (beforeLen < 300 enforced above) for
+  // length protection — no need for a `.or()` filter. PostgREST hits a
+  // parsing bug when `.or(...)` is combined with `.select(...)` on the same
+  // request, returning 400 "column does not exist" even though the column
+  // is fine. Single-key UPDATE + select is the supported path.
   const { data: updated, error: updErr } = await supa
     .from("gear_items")
     .update({
@@ -97,12 +102,8 @@ export async function applyDescriptionUpdate(
       last_description_enriched_at: nowIso,
     })
     .eq("id", itemId)
-    .or("description.is.null,description.eq.")
     .select("id");
 
-  // Some Supabase clients reject the .or() above when length filter is needed
-  // — so attempt a fall-back scoped UPDATE if the typed filter rejected zero
-  // rows AND the read showed the row was eligible (len < 300).
   if (updErr) {
     console.warn(
       `[enrichment-premium] description UPDATE failed for ${itemId}: ${updErr.message}`,
@@ -110,24 +111,7 @@ export async function applyDescriptionUpdate(
     return { ok: false, reason: `update_failed: ${updErr.message}` };
   }
 
-  let updatedRows = Array.isArray(updated) ? updated.length : 0;
-  if (updatedRows === 0 && beforeLen < 300) {
-    // Retry without .or filter — the previous filter excluded short non-empty
-    // descriptions. Re-check len in JS first.
-    const { data: retry, error: retryErr } = await supa
-      .from("gear_items")
-      .update({
-        description,
-        last_description_enriched_at: nowIso,
-      })
-      .eq("id", itemId)
-      .select("id");
-    if (retryErr) {
-      return { ok: false, reason: `retry_failed: ${retryErr.message}` };
-    }
-    updatedRows = Array.isArray(retry) ? retry.length : 0;
-  }
-
+  const updatedRows = Array.isArray(updated) ? updated.length : 0;
   if (updatedRows === 0) {
     return { ok: false, reason: "no_rows_updated" };
   }
