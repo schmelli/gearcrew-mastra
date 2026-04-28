@@ -22,7 +22,10 @@
     "auto-typing:apply": "tsx scripts/run-auto-typing.ts --mode apply",
     "enrichment-lite:dry-run-test": "tsx scripts/run-enrichment-lite.ts --mode dry-run --dry-run-test",
     "enrichment-lite:dry-run": "tsx scripts/run-enrichment-lite.ts --mode dry-run",
-    "enrichment-lite:apply": "tsx scripts/run-enrichment-lite.ts --mode apply"
+    "enrichment-lite:apply": "tsx scripts/run-enrichment-lite.ts --mode apply",
+    "enrichment-premium:dry-run-test": "tsx scripts/run-enrichment-premium.ts --mode dry-run --dry-run-test",
+    "enrichment-premium:dry-run": "tsx scripts/run-enrichment-premium.ts --mode dry-run",
+    "enrichment-premium:apply": "tsx scripts/run-enrichment-premium.ts --mode apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
