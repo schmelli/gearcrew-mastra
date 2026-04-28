@@ -10,7 +10,7 @@
  *        mens-only matches → gender_hint="mens"
  *        womens-only matches → gender_hint="womens"
  *        mixed or none → gender_hint=null
- *   4. filterAndSort  — drop clusters with llm_confidence < 0.7; sort
+ *   4. filterAndSort  — drop clusters with llm_confidence < 0.95; sort
  *      remaining alphabetically by canonical_label.toLowerCase().
  *   5. annotateAffectedItemCount — sum item_counts of canonical+aliases.
  *   6. writeExport    — write {outputDir}/{run_id}.json. dry_run_test=true
@@ -41,7 +41,7 @@ import { getSupabase } from "../lib/supabase.js";
 const DEFAULT_MAX_COST_CENTS = 200;
 const DEFAULT_TOP_N = 50;
 const PRODUCT_TYPE_LEVEL = 3;
-const CONFIDENCE_FLOOR = 0.7;
+const CONFIDENCE_FLOOR = 0.95;
 const EXPORT_URL_BASE =
   "https://geargraph.gearshack.app/gardener/exports/type-dedup";
 

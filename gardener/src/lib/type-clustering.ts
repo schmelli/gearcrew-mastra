@@ -90,23 +90,44 @@ function costCents(inputTokens: number, outputTokens: number): number {
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `Du clusterst outdoor-gear ProductType-Namen (z.B. "Daypack", "Tent", "Sleeping Bag").
-Aufgabe: Eingabe-Liste von Type-Namen mit ihren UUIDs und item_counts → Output: array of clusters where each cluster groups morphologisch/lexikalisch-aequivalente Types together.
+Aufgabe: Eingabe-Liste von Type-Namen mit ihren UUIDs und item_counts → finde NUR ECHTE DUPLIKATE (lexikalische/morphologische Varianten desselben Konzepts).
 
-CRITICAL RULES:
-(1) Casing/Plural-Varianten ('Daypack' / 'Daypacks' / 'daypack') sind IMMER ein Cluster, canonical = die Form mit hoechstem item_count.
-(2) Gender-Varianten ('Men's Daypack' / 'Women's Daypack' / 'Damen Daypack' / 'Herren Daypack') werden als Aliase einer GENDER-FREIEN Canonical-Form ('Daypack') gruppiert WENN diese existiert. Wenn KEINE gender-freie Variante in der Input-Liste ist, lasse sie als separate Cluster.
-(3) Semantisch verschiedene Types (Tent vs Sleeping Bag vs Daypack vs Backpack) werden NIE gemerged — nur lexikalisch/morphologisch aehnliche.
-(4) "Backpack" und "Daypack" sind DIFFERENT (verschiedene Use-Cases) — NICHT mergen.
-(5) "Sleeping Bag" und "Sleeping-Bag" und "sleeping bag" sind ein Cluster (nur Casing/Hyphen unterschied).
-(6) llm_confidence-Skala:
-    1.0   = identische Schreibung (Solo-Cluster)
-    0.95+ = casing/plural-only variants ('Daypack' / 'Daypacks')
-    0.85+ = klare Gender-Variante als alias der gender-freien Form
-    0.7-0.85 = plausibel aber unsicher
-    <0.7  = besser separat (wird downstream gefiltered)
+THE GOLDEN RULE — wenn unsicher, NICHT mergen:
+Ein Cluster mit alias != canonical wird nur erzeugt wenn die Aliase **mit Sicherheit dasselbe Produkt-Konzept** beschreiben — nur in anderer Schreibweise (Casing, Plural, Gender, Bindestrich, Whitespace).
+
+WAS GEMERGT WIRD (yes-cluster):
+(1) Casing/Plural-Varianten: 'Daypack' / 'Daypacks' / 'daypack' → 1 Cluster, canonical = höchstes item_count
+(2) Hyphen/Whitespace-Varianten: 'Sleeping Bag' / 'Sleeping-Bag' / 'sleepingbag' → 1 Cluster
+(3) Gender-Varianten ALS ALIAS DER GENDER-FREIEN FORM: 'Daypack' (canonical) + 'Men's Daypack' + 'Women's Daypack' → 1 Cluster MIT gender_hint. Wenn KEINE gender-freie Form in der Input-Liste, lasse sie als separate Cluster.
+(4) Übersetzungs-Varianten: 'Daypack' / 'Tagesrucksack' → 1 Cluster (vorausgesetzt es ist klar dasselbe Konzept)
+
+WAS NIEMALS GEMERGT WIRD (no-merge):
+(A) Verschiedene Konstruktion/Material: 'Down Quilt' ≠ 'Synthetic Quilt' ≠ 'Underquilt' (Daune ≠ Synthetik ≠ Hängematten-Iso)
+(B) Verschiedene Brennstoff-/Energie-Typen: 'Canister Stove' ≠ 'Liquid Fuel Stove' ≠ 'Alcohol Stove' ≠ 'Solid Fuel Stove' — alle sind eigene Stove-Typen
+(C) Verschiedene Brennstoffe: 'Canister Gas' ≠ 'Liquid Fuel' — physisch verschiedene Produkte
+(D) Verschiedene Körperstellen: 'Base Layer Tops' ≠ 'Base Layer Bottoms' (Oberteil ≠ Unterteil)
+(E) Verschiedene Wetter-/Activity-Funktionen: 'Rain Jacket' ≠ 'Insulated Jacket' ≠ 'Fleece Jacket' ≠ 'Softshell Jacket' ≠ 'Wind Jacket' — alle sind eigene Jacken-Typen mit verschiedenen Use-Cases
+(F) Verschiedene Hosen-Typen: 'Rain Pants' ≠ 'Hiking Pants' ≠ 'Insulated Pants'
+(G) Verschiedene Kit-Inhalte: 'Survival Kit' ≠ 'First Aid Kit' (verschiedener Inhalt + Zweck)
+(H) Verschiedene Pack-Use-Cases: 'Backpacking Pack' ≠ 'Trekking Pack' ≠ 'Ultralight Pack' ≠ 'Specialty Pack' ≠ 'Daypack' — verschiedene Volume + Trip-Length-Targets
+(I) Verschiedene Tent-Capacities/Seasons: '1-Person 3-Season Tent' ≠ '2-Person 3-Season Tent' ≠ '4-Season Tent' — verschiedene Use-Cases
+(J) Verschiedene Cooking-Systeme: 'Integrated Cooking System' ≠ 'Stormcooker System' (verschiedene Konstruktion)
+(K) Allgemein: gleiche Wort-Wurzel mit unterschiedlichem Adjektiv = NICHT dasselbe (Adjektiv-Bedeutung beachten)
+
+WENN IN ZWEIFEL: Solo-Cluster mit confidence=1.0, reasoning='no variants detected'. Lieber 0 falsche Merges als 1 falscher.
+
+llm_confidence-Skala (STRICT):
+    1.00 = identische Schreibung (Solo-Cluster, kein Duplikat gefunden)
+    0.95-0.99 = casing/plural/hyphen-only variants ('Daypack' / 'Daypacks' / 'daypack')
+    0.90-0.94 = klare Gender-Variante als alias der gender-freien Form
+    0.85-0.89 = klare Übersetzungs-Variante (gleiche Bedeutung, andere Sprache)
+    <0.85 = unsicher → setze Solo-Cluster, KEIN Merge
+    Downstream wird mit threshold ≥0.95 gefiltert — alles drunter wird gedropt.
+
+OUTPUT-RULES:
 (7) Solo-types (kein Duplicate gefunden) → eigener Cluster mit aliases=[selbst] (single-element), confidence=1.0, reasoning='no variants detected'.
 (8) Output muss ALLE Input-types abdecken (jede type-id in genau einem cluster, entweder als canonical oder als alias).
-(9) WICHTIG: canonical_category_id und alias_category_ids MUESSEN aus den Input-UUIDs stammen — NICHT erfinden.
+(9) canonical_category_id und alias_category_ids MUESSEN aus den Input-UUIDs stammen — NICHT erfinden.
 
 Antworte AUSSCHLIESSLICH im JSON-Format mit der vorgegebenen Struktur. Keine zusaetzlichen Felder, keine Erklaerungen ausserhalb von llm_reasoning.`;
 
