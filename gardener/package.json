@@ -14,7 +14,9 @@
     "test:integration": "vitest run --project integration",
     "youtube:ingest": "tsx scripts/run-youtube-ingest.ts",
     "brand-dedup:dry-run": "tsx scripts/run-brand-dedup.ts --mode dry-run",
-    "brand-dedup:apply": "tsx scripts/run-brand-dedup.ts --mode apply"
+    "brand-dedup:apply": "tsx scripts/run-brand-dedup.ts --mode apply",
+    "type-dedup:dry-run": "tsx scripts/run-type-dedup.ts --mode dry-run",
+    "type-dedup:dry-run-test": "tsx scripts/run-type-dedup.ts --mode dry-run --dry-run-test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
