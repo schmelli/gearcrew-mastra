@@ -121,6 +121,77 @@ function startScheduler(): void {
 setTimeout(() => startScheduler(), 5000);
 
 // ---------------------------------------------------------------------------
+// YouTube Playlist Incremental Ingest Scheduler
+// Runs the youtubePlaylistIngest workflow on a separate cron, default daily 03:00 UTC.
+// Skips already-completed videos via Supabase processed_videos filter — so only
+// truly new playlist additions are processed.
+// Disable via YOUTUBE_INGEST_AUTONOMOUS=false. Override schedule via YOUTUBE_INGEST_SCHEDULE.
+// ---------------------------------------------------------------------------
+
+let youtubeTask: ScheduledTask | null = null;
+let youtubeIsRunning = false;
+
+async function runYoutubeIncrementalCycle(): Promise<void> {
+  const workflow = mastra.getWorkflow("youtubePlaylistIngest");
+  const playlistId =
+    process.env.YOUTUBE_PLAYLIST_ID || "PLy6TtegcnZj84nCIzqtZcWlNHD6sQAJqj";
+
+  const start = Date.now();
+  const run = await workflow.createRunAsync();
+  const result = await run.start({
+    inputData: {
+      playlistId,
+      dryRun: false,
+      force: false,
+    },
+  });
+
+  const seconds = Math.round((Date.now() - start) / 1000);
+  const stepResult = (result as { result?: Record<string, unknown> }).result ?? {};
+  const succeeded = stepResult.succeeded ?? "?";
+  const failed = stepResult.failed ?? "?";
+  const skipped = stepResult.skipped ?? "?";
+  console.log(
+    `[YouTube-Cron] cycle done in ${seconds}s — succeeded=${succeeded}, failed=${failed}, skipped=${skipped}`,
+  );
+}
+
+function startYoutubeScheduler(): void {
+  const schedule = process.env.YOUTUBE_INGEST_SCHEDULE || "0 3 * * *"; // 03:00 UTC daily
+  const enabled = process.env.YOUTUBE_INGEST_AUTONOMOUS !== "false";
+
+  if (!enabled) {
+    console.log("[YouTube-Cron] Autonomous mode disabled (YOUTUBE_INGEST_AUTONOMOUS=false)");
+    return;
+  }
+
+  youtubeTask = cron.schedule(
+    schedule,
+    async () => {
+      if (youtubeIsRunning) {
+        console.log("[YouTube-Cron] Previous cycle still running, skipping this tick");
+        return;
+      }
+      youtubeIsRunning = true;
+      const tickStart = Date.now();
+      try {
+        await runYoutubeIncrementalCycle();
+      } catch (err) {
+        const duration = Math.round((Date.now() - tickStart) / 1000);
+        console.error(`[YouTube-Cron] Cycle failed (${duration}s):`, err);
+      } finally {
+        youtubeIsRunning = false;
+      }
+    },
+    { timezone: "UTC" },
+  );
+
+  console.log(`[YouTube-Cron] Scheduler started: "${schedule}" (UTC)`);
+}
+
+setTimeout(() => startYoutubeScheduler(), 7000);
+
+// ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
@@ -129,6 +200,10 @@ async function gracefulShutdown(signal: string) {
   if (scanTask) {
     scanTask.stop();
     console.log("[Gardener v3] Scheduler stopped");
+  }
+  if (youtubeTask) {
+    youtubeTask.stop();
+    console.log("[YouTube-Cron] Scheduler stopped");
   }
   await closeDriver();
   process.exit(0);
