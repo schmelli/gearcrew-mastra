@@ -5,6 +5,7 @@ import { youtubeGearExtractor } from "../agents/youtube-gear-extractor.js";
 import { brandCategoryScan } from "../workflows/brand-category-scan.js";
 import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
 import { brandDedup } from "../workflows/brand-dedup.js";
+import { typeDedup } from "../workflows/type-dedup.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -16,7 +17,8 @@ export const mastra = new Mastra({
     YoutubeGearExtractor: youtubeGearExtractor,
   },
   // brandDedup: manual-trigger only (no scheduler) per CONTEXT D-10 100% human-review-gate.
-  workflows: { brandCategoryScan, youtubePlaylistIngest, brandDedup },
+  // typeDedup: manual-trigger only (no scheduler) per CONTEXT D-12 — type-merge happens Gearshack-side via migration.
+  workflows: { brandCategoryScan, youtubePlaylistIngest, brandDedup, typeDedup },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,
