@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "youtube:ingest": "tsx scripts/run-youtube-ingest.ts"
+    "youtube:ingest": "tsx scripts/run-youtube-ingest.ts",
+    "brand-dedup:dry-run": "tsx scripts/run-brand-dedup.ts --mode dry-run",
+    "brand-dedup:apply": "tsx scripts/run-brand-dedup.ts --mode apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
@@ -22,7 +24,8 @@
     "neo4j-driver": "^5.17.0",
     "node-cron": "^4.2.1",
     "p-limit": "^7.3.0",
-    "zod": "^3.23.0"
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
