@@ -86,42 +86,15 @@ const DescriptionLLMResponseSchema = z.object({
 // Skip heuristic — "existing description is good enough"
 // ---------------------------------------------------------------------------
 
-const WEIGHT_PATTERN = /\b\d{1,5}(?:\.\d+)?\s*(?:g|gr|gram|grams|kg|lb|lbs|oz|pound|pounds|ounce|ounces)\b/i;
-
-const MATERIAL_KEYWORDS = [
-  "nylon",
-  "polyester",
-  "down",
-  "aluminum",
-  "aluminium",
-  "titanium",
-  "carbon",
-  "merino",
-  "polyethylene",
-  "dyneema",
-  "silnylon",
-  "cordura",
-  "polyurethane",
-  "ripstop",
-  "fleece",
-  "gore-tex",
-  "primaloft",
-  "polypro",
-  "stainless",
-  "neoprene",
-  "tpe",
-  "tpu",
-  "evlite",
-  "softshell",
-  "hardshell",
-];
-
 function isExistingDescriptionGood(existing: string | null): boolean {
   if (!existing) return false;
-  if (existing.length < 300) return false;
-  const lower = existing.toLowerCase();
-  if (!WEIGHT_PATTERN.test(existing)) return false;
-  return MATERIAL_KEYWORDS.some((kw) => lower.includes(kw));
+  // Single length-based gate. Previously also required weight pattern AND
+  // material keyword, but that bypassed for legitimate scraped marketing copy
+  // (Anfibio, Cumulus, Therm-a-Rest German manuals, etc.) that lacks weight
+  // units inline — wasting Gemini calls on content that's already strong.
+  // 200 chars is the empirical floor where descriptions reliably contain
+  // ≥1 differentiating fact about the product.
+  return existing.length >= 200;
 }
 
 // ---------------------------------------------------------------------------
