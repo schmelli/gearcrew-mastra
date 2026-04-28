@@ -328,7 +328,7 @@ export async function clusterProductTypes(
   const requestBody: ChatRequestBody = {
     model: modelId,
     temperature: 0,
-    max_tokens: 32000,
+    max_tokens: 60000,
     messages: [
       {
         role: "system",
