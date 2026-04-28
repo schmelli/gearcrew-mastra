@@ -168,23 +168,72 @@ interface OpenAIChatResponse {
 }
 
 function tryExtractFencedJson(raw: string): string | null {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced && fenced[1]) return fenced[1].trim();
+  // Match closed fences first.
+  const closed = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (closed && closed[1]) return closed[1].trim();
+  // Fallback: opening fence only (response truncated by max_tokens).
+  const opening = raw.match(/```(?:json)?\s*([\s\S]*)$/);
+  if (opening && opening[1]) return opening[1].trim();
+  return null;
+}
+
+/**
+ * Slice the input to the largest balanced { ... } JSON object substring.
+ * Returns the substring or null if no balanced object is found.
+ */
+function extractBalancedJsonObject(raw: string): string | null {
+  const start = raw.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
   return null;
 }
 
 function parseJsonResponse(content: string): unknown {
-  // Try direct JSON.parse first (response_format=json_object guarantees
-  // valid JSON in spec), then fall back to fenced-block extraction.
+  // Try direct JSON.parse first (works when response_format=json_object).
   try {
     return JSON.parse(content);
   } catch {
+    // Fenced block (closed or opening-only).
     const fenced = tryExtractFencedJson(content);
     if (fenced) {
-      return JSON.parse(fenced);
+      try {
+        return JSON.parse(fenced);
+      } catch {
+        // Fall through to balanced-object extraction.
+      }
+    }
+    // Balanced { ... } extraction (handles trailing prose or truncated fences).
+    const balanced = extractBalancedJsonObject(content);
+    if (balanced) {
+      return JSON.parse(balanced);
     }
     throw new Error(
-      `[brand-clustering] LLM response was not valid JSON: ${content.slice(0, 200)}...`,
+      `[brand-clustering] LLM response was not valid JSON: ${content.slice(0, 500)}...`,
     );
   }
 }
@@ -227,8 +276,13 @@ export async function clusterBrands(
   if (!apiKey) {
     throw new Error("AI_GATEWAY_API_KEY env var is required for brand-clustering");
   }
-  const baseUrl = process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1/ai";
-  const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+  // Vercel AI Gateway exposes its OpenAI-compatible chat endpoint under
+  // /v1/chat/completions (NOT /v1/ai/chat/completions — that path is reserved
+  // for the AI-SDK protocol). The repo's existing AI_GATEWAY_BASE_URL env var
+  // points at /v1/ai for SDK use, so we normalise to /v1 for raw chat calls.
+  const rawBaseUrl = process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1";
+  const trimmed = rawBaseUrl.replace(/\/$/, "").replace(/\/ai$/, "");
+  const endpoint = `${trimmed}/chat/completions`;
 
   console.log(
     `[brand-clustering] calling ${modelId} via ${endpoint} — ${brandCount} brands, estimated ${estimated_cost_cents}¢ (cap ${opts.maxCostCents}¢)`,
@@ -237,18 +291,39 @@ export async function clusterBrands(
   // Pass a JSON-schema hint inline for models that benefit from it (Gemini does).
   const schemaHint = JSON.stringify(zodToJsonSchema(LLMResponseSchema), null, 2);
 
-  const requestBody = {
+  // NOTE: Vercel AI Gateway routes to Vertex/Gemini for google/gemini-* models
+  // and Vertex rejects `response_format: { type: 'json_object' }` (returns
+  // 400 invalid_request_error). We rely on prompt-only JSON instruction and
+  // robust JSON extraction in parseJsonResponse() instead.
+  //
+  // Gemini 2.5 Flash uses "thinking tokens" that count against max_tokens but
+  // are not visible in the response. For 61 brands → ~60 clusters output JSON
+  // (~6KB), set max_tokens generously to avoid silent truncation. 32k covers
+  // the worst case where the model thinks heavily.
+  interface ChatRequestBody {
+    model: string;
+    temperature: number;
+    max_tokens: number;
+    response_format?: { type: "json_object" };
+    messages: Array<{ role: "system" | "user"; content: string }>;
+  }
+  const requestBody: ChatRequestBody = {
     model: modelId,
     temperature: 0,
-    response_format: { type: "json_object" as const },
+    max_tokens: 32000,
     messages: [
       {
-        role: "system" as const,
-        content: `${SYSTEM_PROMPT}\n\nReturn JSON exactly matching this schema (do not include the schema in your output, only the matching JSON object):\n\`\`\`json\n${schemaHint}\n\`\`\``,
+        role: "system",
+        content: `${SYSTEM_PROMPT}\n\nReturn JSON exactly matching this schema. Output ONLY the JSON object — no markdown fence, no explanation, no leading/trailing text:\n\`\`\`json\n${schemaHint}\n\`\`\``,
       },
-      { role: "user" as const, content: buildUserPrompt(validated) },
+      { role: "user", content: buildUserPrompt(validated) },
     ],
   };
+  // For OpenAI/Anthropic models the Vercel gateway accepts response_format —
+  // include it conditionally to harden parsing for those providers.
+  if (!modelId.startsWith("google/")) {
+    requestBody.response_format = { type: "json_object" };
+  }
 
   const res = await fetch(endpoint, {
     method: "POST",
