@@ -123,13 +123,6 @@ export interface InsightsExtractResult {
 // Memgraph reads
 // ---------------------------------------------------------------------------
 
-interface VideoRow {
-  url: string;
-  title: string | null;
-  channel: string | null;
-  transcript: string;
-}
-
 /**
  * Query Memgraph for VideoSource nodes linked to the given gear_item via
  * :EXTRACTED_FROM. Filters out videos without a transcript (or transcripts
