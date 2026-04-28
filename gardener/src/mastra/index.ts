@@ -7,6 +7,7 @@ import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
 import { brandDedup } from "../workflows/brand-dedup.js";
 import { typeDedup } from "../workflows/type-dedup.js";
 import { autoTypingFlash } from "../workflows/auto-typing.js";
+import { enrichmentLite } from "../workflows/enrichment-lite.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -20,7 +21,8 @@ export const mastra = new Mastra({
   // brandDedup: manual-trigger only (no scheduler) per CONTEXT D-10 100% human-review-gate.
   // typeDedup: manual-trigger only (no scheduler) per CONTEXT D-12 — type-merge happens Gearshack-side via migration.
   // autoTypingFlash: manual-trigger only (no scheduler) per CONTEXT D-14 — production apply-runs require human-gating ($10 cost cap).
-  workflows: { brandCategoryScan, youtubePlaylistIngest, brandDedup, typeDedup, autoTypingFlash },
+  // enrichmentLite: manual-trigger only (no scheduler) per Phase 09 GEA-1086+1087 scope-reduced launch flow ($5 combined cost cap).
+  workflows: { brandCategoryScan, youtubePlaylistIngest, brandDedup, typeDedup, autoTypingFlash, enrichmentLite },
   server: {
     port,
     timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,
