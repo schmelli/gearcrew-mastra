@@ -237,7 +237,11 @@ interface WriteExportResult {
  * outputDir resolution:
  *   1. inputData.output_dir_override (absolute or cwd-relative)
  *   2. env TYPE_DEDUP_EXPORT_DIR (absolute path)
- *   3. cwd-relative `gardener/data/exports/type-dedup`
+ *   3. /tmp/exports/type-dedup (writable in any container, no bind-mount required)
+ *
+ * Per Plan-Task-3 Option B: operator extracts files via `docker cp` for the
+ * first 1-2 reviews; static-file-serving via nginx is deferred. URL in
+ * EXPORT_URL_BASE remains a deterministic placeholder until nginx is wired up.
  */
 async function writeExport(
   runId: string,
@@ -260,10 +264,7 @@ async function writeExport(
   } else if (process.env.TYPE_DEDUP_EXPORT_DIR) {
     outputDir = process.env.TYPE_DEDUP_EXPORT_DIR;
   } else {
-    outputDir = resolvePath(
-      process.cwd(),
-      "gardener/data/exports/type-dedup",
-    );
+    outputDir = "/tmp/exports/type-dedup";
   }
 
   await mkdir(outputDir, { recursive: true });
