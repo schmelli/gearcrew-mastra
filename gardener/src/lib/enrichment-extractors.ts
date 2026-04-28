@@ -205,7 +205,7 @@ export async function extractWeightWithGemini(
   const requestBody = {
     model: "google/gemini-2.5-flash",
     temperature: 0,
-    max_tokens: 512,
+    max_tokens: 1024,
     messages: [
       {
         role: "system" as const,

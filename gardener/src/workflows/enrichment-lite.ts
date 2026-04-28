@@ -41,6 +41,7 @@ import {
   applyWeightUpdate,
   applyImageUpdate,
   upsertEnrichmentGap,
+  ensureWorkflowRunRow,
   recordEnrichmentRunCost,
   getCoverageCounts,
   type ItemForWeight,
@@ -430,6 +431,19 @@ const routeAndExecute = createStep({
     console.log(
       `[enrichment-lite] start: run_id=${workflow_run_id} mode=${inputData.mode} target=${inputData.target} max_cost_cents=${inputData.max_cost_cents} limit=${inputData.limit} dry_run_test=${inputData.dry_run_test}`,
     );
+
+    // Pre-create the gardener_workflow_runs row so subsequent FK references
+    // from graph_audit_log.workflow_run_id and enrichment_gaps.last_workflow_run_id
+    // resolve. Skip for dry-run-test (offline) and dry-run (no writes).
+    if (inputData.mode === "apply" && !inputData.dry_run_test) {
+      await ensureWorkflowRunRow(workflow_run_id, "enrichment-lite", {
+        mode: inputData.mode,
+        target: inputData.target,
+        max_cost_cents: inputData.max_cost_cents,
+        confidence_threshold: inputData.confidence_threshold,
+        limit: inputData.limit,
+      });
+    }
 
     // Coverage before
     const coverageBefore = await getCoverageCounts();

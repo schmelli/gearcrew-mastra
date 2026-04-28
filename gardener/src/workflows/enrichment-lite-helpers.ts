@@ -342,6 +342,81 @@ export async function upsertEnrichmentGap(
 }
 
 /**
+ * Insert the gardener_workflow_runs row at the START of the run so that
+ * subsequent FK references from graph_audit_log.workflow_run_id and
+ * enrichment_gaps.last_workflow_run_id resolve. Best-effort — if the FK to
+ * auth.users(id) fails (Gardener has no auth user), we retry without
+ * `started_by`.
+ */
+export async function ensureWorkflowRunRow(
+  workflowRunId: string,
+  workflowId: string = "enrichment-lite",
+  params: Record<string, unknown> = {},
+): Promise<void> {
+  try {
+    const supa = getSupabase();
+
+    const { data: existing, error: selErr } = await supa
+      .from("gardener_workflow_runs")
+      .select("id")
+      .eq("id", workflowRunId)
+      .maybeSingle();
+    if (selErr) {
+      console.warn(
+        `[enrichment] gardener_workflow_runs pre-insert select failed (continuing): ${selErr.message}`,
+      );
+      return;
+    }
+    if (existing?.id) return;
+
+    const startedBy = process.env.GARDENER_SYSTEM_USER_ID;
+    const baseRow: Record<string, unknown> = {
+      id: workflowRunId,
+      workflow_id: workflowId,
+      run_id: workflowRunId,
+      started_at: new Date().toISOString(),
+      status: "running",
+      params,
+      dry_run: false,
+      cost_cents: 0,
+      result_data: { phase: "starting" },
+    };
+    if (startedBy) baseRow.started_by = startedBy;
+
+    const { error } = await supa
+      .from("gardener_workflow_runs")
+      .insert(baseRow);
+    if (!error) return;
+
+    // Retry without started_by if FK to auth.users(id) violated.
+    const isFkViolation =
+      error.message?.toLowerCase().includes("foreign key") ?? false;
+    if (isFkViolation && startedBy) {
+      console.warn(
+        `[enrichment] gardener_workflow_runs insert FK-violation on started_by — retrying without it`,
+      );
+      delete baseRow.started_by;
+      const { error: retryErr } = await supa
+        .from("gardener_workflow_runs")
+        .insert(baseRow);
+      if (retryErr) {
+        console.warn(
+          `[enrichment] gardener_workflow_runs retry insert failed (continuing): ${retryErr.message}`,
+        );
+      }
+      return;
+    }
+
+    console.warn(
+      `[enrichment] gardener_workflow_runs pre-insert failed (continuing): ${error.message}`,
+    );
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(`[enrichment] ensureWorkflowRunRow threw: ${reason}`);
+  }
+}
+
+/**
  * Schema-drift-tolerant UPDATE/INSERT of gardener_workflow_runs after each
  * batch. NEVER throws — best-effort observability trail. FK to auth.users(id)
  * may fail (Gardener has no auth user) — log + continue.
