@@ -12,6 +12,7 @@ import { enrichmentPremium } from "../workflows/enrichment-premium.js";
 import { successorDetection } from "../workflows/successor-detection.js";
 import { specNormalization } from "../workflows/spec-normalization.js";
 import { supabaseMemgraphBridge } from "../workflows/supabase-memgraph-bridge.js";
+import { backfillBridgeTranscripts } from "../workflows/backfill-bridge-transcripts.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -49,6 +50,7 @@ export const mastra = new Mastra({
     successorDetection,
     specNormalization,
     supabaseMemgraphBridge,
+    backfillBridgeTranscripts,
   },
   server: {
     port,
