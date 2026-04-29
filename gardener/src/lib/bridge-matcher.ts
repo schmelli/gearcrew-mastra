@@ -34,8 +34,35 @@ export interface BridgeMatchResult {
 }
 
 /**
- * Look up a Supabase gear_item in Memgraph by case-insensitive (brand, name).
- * Read-only — does not mutate.
+ * Strip a brand prefix from a name. Handles cases like:
+ *   "MSR Hubba Hubba NX 2" + brand="MSR" → "Hubba Hubba NX 2"
+ *   "NITECORE NB20000 Power Bank" + brand="NITECORE" → "NB20000 Power Bank"
+ * If the name does not start with the brand (case-insensitive), returns the
+ * trimmed original.
+ */
+function stripBrandPrefix(name: string, brand: string): string {
+  const lowerName = name.trim().toLowerCase();
+  const lowerBrand = brand.trim().toLowerCase();
+  if (!lowerBrand || !lowerName.startsWith(lowerBrand)) return name.trim();
+  // Strip the brand and any leading separator (space, dash, slash, comma)
+  return name
+    .trim()
+    .substring(brand.length)
+    .replace(/^[\s\-/,]+/, "")
+    .trim();
+}
+
+/**
+ * Look up a Supabase gear_item in Memgraph.
+ *
+ * Match strategy (in order):
+ *   1. EXACT case-insensitive (brand, name)
+ *   2. EXACT (brand, stripped_name) — handles "MSR Hubba Hubba" → "Hubba Hubba"
+ *   3. STARTS-WITH bidirectional (brand, stripped_name) — handles
+ *      "Hubba Hubba 2" ↔ "Hubba Hubba NX 2"
+ *
+ * Returns the first found match; if multiple GearItems match the same query,
+ * outcome is "ambiguous".
  */
 export async function findMemgraphMatch(
   session: Session,
@@ -55,18 +82,51 @@ export async function findMemgraphMatch(
     };
   }
 
+  // Compute stripped name once; reused across stages 2 & 3.
+  const stripped = stripBrandPrefix(name, brand);
+
+  // Stage 1+2+3 in a single query: try exact name, exact stripped, then
+  // STARTS-WITH bidirectional. We assign a `priority` so callers can pick the
+  // strongest match.
   const result = await session.run(
     `MATCH (g:GearItem)
      WHERE toLower(g.brand) = toLower($brand)
-       AND toLower(g.name) = toLower($name)
-     RETURN ID(g) AS node_id
+       AND (
+         toLower(g.name) = toLower($name)
+         OR toLower(g.name) = toLower($stripped)
+         OR toLower(g.name) STARTS WITH toLower($stripped)
+         OR toLower($stripped) STARTS WITH toLower(g.name)
+       )
+     RETURN ID(g) AS node_id,
+            CASE
+              WHEN toLower(g.name) = toLower($name) THEN 0
+              WHEN toLower(g.name) = toLower($stripped) THEN 1
+              WHEN toLower(g.name) STARTS WITH toLower($stripped)
+                OR toLower($stripped) STARTS WITH toLower(g.name) THEN 2
+              ELSE 9
+            END AS priority
+     ORDER BY priority ASC
      LIMIT 5`,
-    { brand, name },
+    { brand, name, stripped },
   );
 
   const matchCount = result.records.length;
   const firstNodeId =
     matchCount > 0 ? toNumber(result.records[0]!.get("node_id")) : null;
+
+  // Determine ambiguity: if multiple records share the SAME priority (e.g.,
+  // 2 different exact-stripped matches), it's ambiguous. Otherwise the
+  // priority ordering picks the strongest, which is fine.
+  let outcome: BridgeMatchResult["outcome"] = "unmatched";
+  if (matchCount === 1) {
+    outcome = "matched";
+  } else if (matchCount > 1) {
+    const topPriority = toNumber(result.records[0]!.get("priority"));
+    const tiedAtTop = result.records.filter(
+      (r) => toNumber(r.get("priority")) === topPriority,
+    ).length;
+    outcome = tiedAtTop === 1 ? "matched" : "ambiguous";
+  }
 
   return {
     supabase_id: item.id,
@@ -74,12 +134,7 @@ export async function findMemgraphMatch(
     name,
     match_count: matchCount,
     memgraph_node_id: firstNodeId,
-    outcome:
-      matchCount === 0
-        ? "unmatched"
-        : matchCount === 1
-          ? "matched"
-          : "ambiguous",
+    outcome,
   };
 }
 
