@@ -13,9 +13,11 @@ import { successorDetection } from "../workflows/successor-detection.js";
 import { specNormalization } from "../workflows/spec-normalization.js";
 import { supabaseMemgraphBridge } from "../workflows/supabase-memgraph-bridge.js";
 import { backfillBridgeTranscripts } from "../workflows/backfill-bridge-transcripts.js";
+import { backfillAllTranscripts } from "../workflows/backfill-all-transcripts.js";
 import { tipClassification } from "../workflows/tip-classification.js";
 import { insightMigration } from "../workflows/insight-migration.js";
 import { memgraphProductTypeBackfill } from "../workflows/memgraph-product-type-backfill.js";
+import { memgraphInsightsExtraction } from "../workflows/memgraph-insights-extraction.js";
 import { rerouteFallbackTips } from "../workflows/reroute-fallback-tips.js";
 import { closeDriver } from "../lib/memgraph.js";
 
@@ -55,9 +57,11 @@ export const mastra = new Mastra({
     specNormalization,
     supabaseMemgraphBridge,
     backfillBridgeTranscripts,
+    backfillAllTranscripts,
     tipClassification,
     insightMigration,
     memgraphProductTypeBackfill,
+    memgraphInsightsExtraction,
     rerouteFallbackTips,
   },
   server: {
