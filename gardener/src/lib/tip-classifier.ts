@@ -42,10 +42,11 @@ export interface TipClassification {
 }
 
 const ClassificationSchema = z.object({
-  insight_id: z.string(),
+  // LLM may return insight_id as either a string OR a number — coerce to string.
+  insight_id: z.coerce.string(),
   classification: z.enum(["GENERIC", "FAMILY", "SPECIFIC", "AMBIGUOUS"]),
-  confidence: z.number().min(0).max(1),
-  reasoning: z.string().max(500),
+  confidence: z.coerce.number().min(0).max(1),
+  reasoning: z.string().max(2000),
 });
 
 const BatchResponseSchema = z.object({
