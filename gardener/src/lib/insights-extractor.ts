@@ -133,6 +133,9 @@ export async function fetchVideosForItem(
 ): Promise<VideoForInsights[]> {
   const session = getReadSession();
   try {
+    // Memgraph limitation: LIMIT does NOT accept parameter substitution —
+    // it must be an integer literal. Inline MAX_VIDEOS_PER_ITEM into the
+    // query string. (Other params still passed normally.)
     const result = await session.run(
       `
       MATCH (g:GearItem {supabase_id: $itemId})-[:EXTRACTED_FROM]->(v:VideoSource)
@@ -144,9 +147,9 @@ export async function fetchVideosForItem(
         v.channel AS channel,
         v.transcript_text AS transcript
       ORDER BY size(v.transcript_text) DESC
-      LIMIT $cap
+      LIMIT ${MAX_VIDEOS_PER_ITEM}
       `,
-      { itemId, minLen: MIN_TRANSCRIPT_LENGTH, cap: MAX_VIDEOS_PER_ITEM },
+      { itemId, minLen: MIN_TRANSCRIPT_LENGTH },
     );
 
     const videos: VideoForInsights[] = [];
