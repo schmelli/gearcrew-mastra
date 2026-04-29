@@ -266,6 +266,15 @@ function parseJsonInsights(content: string): unknown {
         // fallthrough
       }
     }
+    // Fallback: opened-but-not-closed fence (response truncated by max_tokens)
+    const openOnly = content.match(/```(?:json)?\s*\n?([\s\S]+)$/i);
+    if (openOnly && openOnly[1]) {
+      try {
+        return JSON.parse(openOnly[1].trim());
+      } catch {
+        // fallthrough
+      }
+    }
     const start = content.indexOf("{");
     if (start !== -1) {
       let depth = 0;
