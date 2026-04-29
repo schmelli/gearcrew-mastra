@@ -25,7 +25,9 @@
     "enrichment-lite:apply": "tsx scripts/run-enrichment-lite.ts --mode apply",
     "enrichment-premium:dry-run-test": "tsx scripts/run-enrichment-premium.ts --mode dry-run --dry-run-test",
     "enrichment-premium:dry-run": "tsx scripts/run-enrichment-premium.ts --mode dry-run",
-    "enrichment-premium:apply": "tsx scripts/run-enrichment-premium.ts --mode apply"
+    "enrichment-premium:apply": "tsx scripts/run-enrichment-premium.ts --mode apply",
+    "bridge:dry-run": "tsx scripts/run-bridge.ts --mode dry-run",
+    "bridge:apply": "tsx scripts/run-bridge.ts --mode apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

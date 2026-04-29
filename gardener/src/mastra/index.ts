@@ -11,6 +11,7 @@ import { enrichmentLite } from "../workflows/enrichment-lite.js";
 import { enrichmentPremium } from "../workflows/enrichment-premium.js";
 import { successorDetection } from "../workflows/successor-detection.js";
 import { specNormalization } from "../workflows/spec-normalization.js";
+import { supabaseMemgraphBridge } from "../workflows/supabase-memgraph-bridge.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -32,6 +33,9 @@ export const mastra = new Mastra({
   //                 Scheduler + cron defer to next deployment task.
   // successorDetection: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
   // specNormalization: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
+  // supabaseMemgraphBridge: manual-trigger only (registered quick-260429). Stamps g.supabase_id on
+  //                 Memgraph GearItem nodes by case-insensitive (brand, name) match. Prerequisite
+  //                 for enrichmentPremium insights extraction.
   // productDiscovery + brandEnrichment: NOT registered — both still use legacy `new Workflow()` v2 API.
   //                 v2->v3 retrofit is its own task; defer to post-launch (quick-260428-jux scope decision).
   workflows: {
@@ -44,6 +48,7 @@ export const mastra = new Mastra({
     enrichmentPremium,
     successorDetection,
     specNormalization,
+    supabaseMemgraphBridge,
   },
   server: {
     port,
