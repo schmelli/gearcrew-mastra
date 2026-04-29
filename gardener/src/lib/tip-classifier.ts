@@ -263,7 +263,10 @@ export async function classifyTipBatch(
   }
 
   const parsed = parseJsonResponse(content);
-  const validated = BatchResponseSchema.parse(parsed);
+  // LLM sometimes returns the bare classifications array, sometimes the
+  // {"classifications": [...]} wrapper. Accept both.
+  const wrapped = Array.isArray(parsed) ? { classifications: parsed } : parsed;
+  const validated = BatchResponseSchema.parse(wrapped);
 
   const usage = json.usage ?? {};
   const inputTokens = usage.prompt_tokens ?? 0;

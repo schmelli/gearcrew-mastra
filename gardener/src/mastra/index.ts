@@ -56,7 +56,10 @@ export const mastra = new Mastra({
   },
   server: {
     port,
-    timeout: process.env.NODE_ENV === "production" ? 300000 : 600000,
+    // Long timeout to support multi-batch workflows (tip-classification:
+    // 9525 tips × 50/batch = 191 batches × ~3s ≈ 10 min). Default 5 min was
+    // too tight. 30 min covers worst-case batch retries.
+    timeout: process.env.NODE_ENV === "production" ? 1800000 : 600000,
   },
 });
 
