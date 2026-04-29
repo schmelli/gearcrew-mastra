@@ -135,7 +135,7 @@ export async function fetchVideosForItem(
   try {
     const result = await session.run(
       `
-      MATCH (g:GearItem {id: $itemId})-[:EXTRACTED_FROM]->(v:VideoSource)
+      MATCH (g:GearItem {supabase_id: $itemId})-[:EXTRACTED_FROM]->(v:VideoSource)
       WHERE v.transcript_text IS NOT NULL
         AND size(v.transcript_text) > $minLen
       RETURN
@@ -363,7 +363,7 @@ async function writeInsightToGraph(
     // Using a small numeric guard avoids a false "created" when the edge already exists.
     const existsResult = await session.run(
       `
-      OPTIONAL MATCH (g:GearItem {id: $itemId})-[r:HAS_INSIGHT]->(i:Insight {text: $text, category: $category})
+      OPTIONAL MATCH (g:GearItem {supabase_id: $itemId})-[r:HAS_INSIGHT]->(i:Insight {text: $text, category: $category})
       RETURN count(r) AS existed
       `,
       { itemId, text: insight.text, category: insight.category },
@@ -382,7 +382,7 @@ async function writeInsightToGraph(
         ON MATCH SET
           i.last_seen_at = datetime()
       WITH i
-      MATCH (g:GearItem {id: $itemId})
+      MATCH (g:GearItem {supabase_id: $itemId})
       MERGE (g)-[hi:HAS_INSIGHT]->(i)
         ON CREATE SET hi.created_at = datetime()
       WITH i
