@@ -328,7 +328,7 @@ async function extractInsightsForVideo(
   const requestBody = {
     model: "google/gemini-2.5-flash",
     temperature: 0,
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [
       { role: "system" as const, content: INSIGHTS_SYSTEM_PROMPT },
       { role: "user" as const, content: buildUserPrompt(item, video) },
