@@ -15,6 +15,8 @@ import { supabaseMemgraphBridge } from "../workflows/supabase-memgraph-bridge.js
 import { backfillBridgeTranscripts } from "../workflows/backfill-bridge-transcripts.js";
 import { tipClassification } from "../workflows/tip-classification.js";
 import { insightMigration } from "../workflows/insight-migration.js";
+import { memgraphProductTypeBackfill } from "../workflows/memgraph-product-type-backfill.js";
+import { rerouteFallbackTips } from "../workflows/reroute-fallback-tips.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -55,6 +57,8 @@ export const mastra = new Mastra({
     backfillBridgeTranscripts,
     tipClassification,
     insightMigration,
+    memgraphProductTypeBackfill,
+    rerouteFallbackTips,
   },
   server: {
     port,
