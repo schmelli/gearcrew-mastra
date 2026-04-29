@@ -121,8 +121,13 @@ function buildBatchUserPrompt(tips: TipForClassification[]): string {
 // ---------------------------------------------------------------------------
 
 function tryExtractFencedJson(raw: string): string | null {
-  const m = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
-  return m?.[1] ?? null;
+  // Match ```json ... ``` first (with closing fence)
+  const closed = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n```/i);
+  if (closed?.[1]) return closed[1];
+  // Fallback: response truncated — fence opened but never closed.
+  // Take everything after the opening fence.
+  const open = raw.match(/```(?:json)?\s*\n?([\s\S]+)$/i);
+  return open?.[1] ?? null;
 }
 
 function extractBalancedJsonObject(raw: string): string | null {
@@ -226,7 +231,7 @@ export async function classifyTipBatch(
   const requestBody = {
     model: "google/gemini-2.5-flash",
     temperature: 0,
-    max_tokens: 8192,
+    max_tokens: 16384,
     messages: [
       { role: "system" as const, content: SYSTEM_PROMPT },
       { role: "user" as const, content: buildBatchUserPrompt(tips) },
