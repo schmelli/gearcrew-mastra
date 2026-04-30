@@ -258,6 +258,10 @@ const backfillStep = createStep({
           const meetsThreshold =
             cls.suggested_type_name !== null &&
             cls.confidence >= inputData.confidence_threshold;
+          // DEBUG
+          console.log(
+            `[product-type-backfill] DEBUG cls=${cls.memgraph_id} name=${cls.suggested_type_name} conf=${cls.confidence} threshold=${inputData.confidence_threshold} meets=${meetsThreshold}`,
+          );
 
           if (meetsThreshold && cls.suggested_type_name !== null) {
             classified += 1;
