@@ -330,6 +330,13 @@ export async function classifyProductTypeBatch(
       `[memgraph-product-type-classifier] hallucination-guard rewrote ${halluCount} suggestions to null`,
     );
   }
+  // DEBUG: log final cleaned classifications
+  console.log(
+    `[memgraph-product-type-classifier] DEBUG cleaned: ${JSON.stringify(cleaned.map(c => ({id: c.memgraph_id, name: c.suggested_type_name, conf: c.confidence}))).slice(0, 600)}`,
+  );
+  console.log(
+    `[memgraph-product-type-classifier] DEBUG candidates sample: ${candidates.slice(0, 3).map(c => c.name).join("|")} ... candCount=${candidates.length}`,
+  );
   if (unknownItemCount > 0) {
     console.warn(
       `[memgraph-product-type-classifier] ${unknownItemCount} LLM results referenced unknown memgraph_ids — dropped`,
