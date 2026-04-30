@@ -277,6 +277,11 @@ export async function classifyProductTypeBatch(
     );
   }
 
+  // DEBUG: log first chars of response to diagnose 'classified=0' bug
+  console.log(
+    `[memgraph-product-type-classifier] DEBUG response (items=${items.length}): ${content.slice(0, 800).replace(/\n/g, " ")}`,
+  );
+
   const parsed = parseJsonResponse(content);
   // LLM sometimes returns the bare results array; accept both.
   const wrapped = Array.isArray(parsed) ? { results: parsed } : parsed;
