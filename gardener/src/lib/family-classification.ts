@@ -252,10 +252,12 @@ function parseJsonResponse(content: string): unknown {
 }
 
 // Default batch size: keeps Gemini Flash output well under the 32k max_tokens
-// limit. Each family produces ~140 tokens of JSON output, so 100 families ≈
-// 14k tokens — comfortable headroom for Gemini's hidden thinking-tokens budget.
+// limit. First production run with batchSize=100 produced ~24k output tokens
+// per batch and hit silent truncation in 3 of 7 batches — Gemini's hidden
+// thinking-tokens budget eats more than expected. Reducing to 50 → ~7k output
+// tokens per batch, leaves comfortable headroom even on heavy reasoning runs.
 // Override via FAMILY_CANONICAL_BATCH_SIZE env var.
-const DEFAULT_BATCH_SIZE = 100;
+const DEFAULT_BATCH_SIZE = 50;
 
 function resolveBatchSize(): number {
   const fromEnv = process.env.FAMILY_CANONICAL_BATCH_SIZE;
