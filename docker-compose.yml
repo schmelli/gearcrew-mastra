@@ -24,9 +24,10 @@ services:
     ports:
       - "3001:4111"
     environment:
-      - MEMGRAPH_URI=bolt://memgraph:7687
-      - MEMGRAPH_USER=memgraph
-      - MEMGRAPH_PASSWORD=
+      # MEMGRAPH_URI / MEMGRAPH_USER / MEMGRAPH_PASSWORD: read from .env via env_file.
+      # Do NOT hardcode them here — the explicit `environment:` block overrides
+      # env_file values, and that masked an auth-mismatch with the live
+      # memgraph-platform stack (correct password lives in .env).
       - NODE_ENV=production
       - PORT=4111
     depends_on:
