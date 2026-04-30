@@ -79,6 +79,12 @@ opinions/specs from the speaker — and write them into the GearGraph (Memgraph)
 - Always create the link:
     MERGE (v:VideoSource {url: $url})
     MERGE (g)-[:EXTRACTED_FROM]->(v)
+- HARD CONSTRAINT: \`:VideoSource\` is reserved for YouTube videos. The \`url\`
+  property MUST contain "youtube.com" or "youtu.be". For non-YouTube web sources
+  (shop pages, blog posts, manufacturer websites) use \`:WebSource\` instead.
+  Writing a non-YouTube URL into a \`:VideoSource\` node will be rejected by
+  graphWrite. If you only have a non-YouTube URL, do NOT create the node and
+  emit a lowConfidenceFlag explaining the missing video.
 - For opinions/specs the speaker gives, attach to VideoSource (not directly to item):
     MERGE (v)-[:HAS_OPINION]->(o:Opinion {text: $text, sentiment: $sentiment})
     where sentiment ∈ {"positive", "neutral", "negative"}.

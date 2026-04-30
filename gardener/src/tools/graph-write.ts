@@ -60,6 +60,39 @@ After writing, always verify with a graphQuery read-back.`,
       );
     }
 
+    // Defensive guard: :VideoSource nodes MUST reference a YouTube URL.
+    // Historical bug planted ~465 fake :VideoSource nodes for camp4.de shop URLs
+    // (404 of them with title="Auto-created source") that polluted the
+    // transcript-backfill candidate pool. Use :WebSource for non-YouTube sources.
+    if (/MERGE\s*\([^)]*:VideoSource[^)]*\burl\s*:/i.test(query)) {
+      const paramMatch = query.match(/:VideoSource\s*\{[^}]*\burl\s*:\s*\$(\w+)/i);
+      const literalMatch = query.match(
+        /:VideoSource\s*\{[^}]*\burl\s*:\s*['"]([^'"]+)['"]/i,
+      );
+
+      let urlValue: string | undefined;
+      if (paramMatch && params) {
+        const paramName = paramMatch[1];
+        if (paramName) {
+          const v = params[paramName];
+          if (typeof v === "string") urlValue = v;
+        }
+      } else if (literalMatch) {
+        urlValue = literalMatch[1];
+      }
+
+      if (
+        urlValue &&
+        !urlValue.includes("youtube.com") &&
+        !urlValue.includes("youtu.be")
+      ) {
+        throw new Error(
+          `:VideoSource MERGE rejected — URL is not a YouTube URL: "${urlValue}". ` +
+            `Use :WebSource for non-YouTube web sources (shop pages, blog posts, etc.).`,
+        );
+      }
+    }
+
     // Retry loop for Memgraph transaction conflicts
     const MAX_RETRIES = 3;
     const RETRY_DELAY_MS = 500;
