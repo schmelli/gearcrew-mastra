@@ -251,55 +251,37 @@ function parseJsonResponse(content: string): unknown {
   }
 }
 
+// Default batch size: keeps Gemini Flash output well under the 32k max_tokens
+// limit. Each family produces ~140 tokens of JSON output, so 100 families ≈
+// 14k tokens — comfortable headroom for Gemini's hidden thinking-tokens budget.
+// Override via FAMILY_CANONICAL_BATCH_SIZE env var.
+const DEFAULT_BATCH_SIZE = 100;
+
+function resolveBatchSize(): number {
+  const fromEnv = process.env.FAMILY_CANONICAL_BATCH_SIZE;
+  if (!fromEnv) return DEFAULT_BATCH_SIZE;
+  const n = parseInt(fromEnv, 10);
+  if (Number.isNaN(n) || n <= 0) return DEFAULT_BATCH_SIZE;
+  return n;
+}
+
+interface BatchClassifyResult {
+  proposals: FamilyClassificationProposal[];
+  input_tokens: number;
+  output_tokens: number;
+}
+
 /**
- * Classify ProductFamilies via Vercel AI Gateway. Mirrors clusterBrands()
- * shape so the workflow orchestration is symmetric.
- *
- * Flow:
- *   1. Pre-call cost estimate. Abort BEFORE LLM if estimate > maxCostCents.
- *   2. POST chat completion with strict JSON instruction.
- *   3. Parse + validate. Soft-validate that every input family is covered.
- *   4. Compute actual cost. If actual > maxCostCents, return proposals but
- *      flag aborted_due_to_cost=true.
+ * Single LLM call for one batch of families. Throws on HTTP error or unparseable
+ * response; caller decides whether to bail or continue with the next batch.
  */
-export async function classifyFamilies(
-  snapshot: FamilySnapshot,
-  opts: ClassifyFamiliesOptions,
-): Promise<ClassifyFamiliesResult> {
-  const validated = FamilySnapshotSchema.parse(snapshot);
-  const familyCount = validated.families.length;
-  const estimated_cost_cents = estimateCostCents(familyCount);
-
-  if (estimated_cost_cents > opts.maxCostCents) {
-    console.warn(
-      `[family-classification] PRE-CALL ABORT — estimated ${estimated_cost_cents}¢ exceeds cap ${opts.maxCostCents}¢ (families=${familyCount})`,
-    );
-    return {
-      proposals: [],
-      cost_cents_used: 0,
-      estimated_cost_cents,
-      aborted_due_to_cost: true,
-    };
-  }
-
-  const modelId = resolveModelId(opts.modelIdOverride);
-  const apiKey = process.env.AI_GATEWAY_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "AI_GATEWAY_API_KEY env var is required for family-classification",
-    );
-  }
-  const rawBaseUrl =
-    process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1";
-  const trimmed = rawBaseUrl.replace(/\/$/, "").replace(/\/ai$/, "");
-  const endpoint = `${trimmed}/chat/completions`;
-
-  console.log(
-    `[family-classification] calling ${modelId} via ${endpoint} — ${familyCount} families, estimated ${estimated_cost_cents}¢ (cap ${opts.maxCostCents}¢)`,
-  );
-
-  const schemaHint = JSON.stringify(zodToJsonSchema(LLMResponseSchema), null, 2);
-
+async function classifyBatch(
+  batch: FamilySnapshot,
+  endpoint: string,
+  apiKey: string,
+  modelId: `${string}/${string}`,
+  schemaHint: string,
+): Promise<BatchClassifyResult> {
   interface ChatRequestBody {
     model: string;
     temperature: number;
@@ -316,7 +298,7 @@ export async function classifyFamilies(
         role: "system",
         content: `${SYSTEM_PROMPT}\n\nReturn JSON exactly matching this schema. Output ONLY the JSON object — no markdown fence, no explanation:\n\`\`\`json\n${schemaHint}\n\`\`\``,
       },
-      { role: "user", content: buildUserPrompt(validated) },
+      { role: "user", content: buildUserPrompt(batch) },
     ],
   };
   if (!modelId.startsWith("google/")) {
@@ -351,25 +333,125 @@ export async function classifyFamilies(
   const validatedResponse = LLMResponseSchema.parse(parsed);
 
   const usage = json.usage ?? {};
-  const inputTokens = usage.prompt_tokens ?? 0;
-  const outputTokens = usage.completion_tokens ?? 0;
-  const actualCost = costCents(inputTokens, outputTokens);
+  return {
+    proposals: validatedResponse.classifications,
+    input_tokens: usage.prompt_tokens ?? 0,
+    output_tokens: usage.completion_tokens ?? 0,
+  };
+}
 
-  const proposals = validatedResponse.classifications;
+/**
+ * Classify ProductFamilies via Vercel AI Gateway. Mirrors clusterBrands()
+ * shape so the workflow orchestration is symmetric.
+ *
+ * Flow:
+ *   1. Pre-call cost estimate. Abort BEFORE LLM if estimate > maxCostCents.
+ *   2. Split families into batches of FAMILY_CANONICAL_BATCH_SIZE (default 100)
+ *      to stay under Gemini's 32k max_tokens output limit.
+ *   3. Per batch: POST chat completion, parse, validate. Per-batch failures
+ *      are logged and skipped (other batches continue).
+ *   4. Aggregate proposals across batches. If cumulative cost exceeds
+ *      maxCostCents, abort remaining batches and flag aborted_due_to_cost=true.
+ */
+export async function classifyFamilies(
+  snapshot: FamilySnapshot,
+  opts: ClassifyFamiliesOptions,
+): Promise<ClassifyFamiliesResult> {
+  const validated = FamilySnapshotSchema.parse(snapshot);
+  const familyCount = validated.families.length;
+  const estimated_cost_cents = estimateCostCents(familyCount);
 
-  const aborted_due_to_cost = actualCost > opts.maxCostCents;
-  if (aborted_due_to_cost) {
+  if (estimated_cost_cents > opts.maxCostCents) {
     console.warn(
-      `[family-classification] POST-CALL OVERAGE — actual ${actualCost}¢ exceeds cap ${opts.maxCostCents}¢ (in=${inputTokens}, out=${outputTokens})`,
+      `[family-classification] PRE-CALL ABORT — estimated ${estimated_cost_cents}¢ exceeds cap ${opts.maxCostCents}¢ (families=${familyCount})`,
     );
-  } else {
+    return {
+      proposals: [],
+      cost_cents_used: 0,
+      estimated_cost_cents,
+      aborted_due_to_cost: true,
+    };
+  }
+
+  const modelId = resolveModelId(opts.modelIdOverride);
+  const apiKey = process.env.AI_GATEWAY_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "AI_GATEWAY_API_KEY env var is required for family-classification",
+    );
+  }
+  const rawBaseUrl =
+    process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1";
+  const trimmed = rawBaseUrl.replace(/\/$/, "").replace(/\/ai$/, "");
+  const endpoint = `${trimmed}/chat/completions`;
+
+  const batchSize = resolveBatchSize();
+  const totalBatches = Math.ceil(familyCount / batchSize);
+  const schemaHint = JSON.stringify(zodToJsonSchema(LLMResponseSchema), null, 2);
+
+  console.log(
+    `[family-classification] calling ${modelId} via ${endpoint} — ${familyCount} families in ${totalBatches} batch(es) of up to ${batchSize}, estimated ${estimated_cost_cents}¢ (cap ${opts.maxCostCents}¢)`,
+  );
+
+  const allProposals: FamilyClassificationProposal[] = [];
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let cumulativeCost = 0;
+  let aborted_due_to_cost = false;
+  const failedBatches: number[] = [];
+
+  for (let batchIdx = 0; batchIdx < totalBatches; batchIdx += 1) {
+    const start = batchIdx * batchSize;
+    const end = Math.min(start + batchSize, familyCount);
+    const batchSnapshot: FamilySnapshot = {
+      families: validated.families.slice(start, end),
+    };
+
     console.log(
-      `[family-classification] OK — ${proposals.length} classifications, ${actualCost}¢ used (in=${inputTokens}, out=${outputTokens})`,
+      `[family-classification] batch ${batchIdx + 1}/${totalBatches}: classifying families ${start}-${end - 1} (${batchSnapshot.families.length} entries)`,
+    );
+
+    try {
+      const batchResult = await classifyBatch(
+        batchSnapshot,
+        endpoint,
+        apiKey,
+        modelId,
+        schemaHint,
+      );
+      allProposals.push(...batchResult.proposals);
+      totalInputTokens += batchResult.input_tokens;
+      totalOutputTokens += batchResult.output_tokens;
+      cumulativeCost = costCents(totalInputTokens, totalOutputTokens);
+
+      console.log(
+        `[family-classification] batch ${batchIdx + 1}/${totalBatches} OK — ${batchResult.proposals.length} classifications, cumulative ${cumulativeCost}¢ (in=${totalInputTokens}, out=${totalOutputTokens})`,
+      );
+
+      if (cumulativeCost > opts.maxCostCents) {
+        console.warn(
+          `[family-classification] CUMULATIVE COST OVERAGE after batch ${batchIdx + 1} — ${cumulativeCost}¢ exceeds cap ${opts.maxCostCents}¢, aborting remaining ${totalBatches - batchIdx - 1} batch(es)`,
+        );
+        aborted_due_to_cost = true;
+        break;
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[family-classification] batch ${batchIdx + 1}/${totalBatches} FAILED: ${reason.slice(0, 200)}`,
+      );
+      failedBatches.push(batchIdx + 1);
+    }
+  }
+
+  if (failedBatches.length > 0) {
+    console.warn(
+      `[family-classification] ${failedBatches.length} batch(es) failed: ${failedBatches.join(", ")}`,
     );
   }
 
   // Coverage check
-  const proposalIds = new Set(proposals.map((p) => p.family_node_id));
+  const proposalIds = new Set(allProposals.map((p) => p.family_node_id));
   const missing = validated.families.filter(
     (f) => !proposalIds.has(f.family_node_id),
   );
@@ -383,17 +465,20 @@ export async function classifyFamilies(
   }
 
   // Distribution log
-  const dist = proposals.reduce<Record<string, number>>((acc, p) => {
+  const dist = allProposals.reduce<Record<string, number>>((acc, p) => {
     acc[p.classification] = (acc[p.classification] ?? 0) + 1;
     return acc;
   }, {});
+  console.log(
+    `[family-classification] FINAL: ${allProposals.length} classifications across ${totalBatches - failedBatches.length}/${totalBatches} successful batches, ${cumulativeCost}¢ used (in=${totalInputTokens}, out=${totalOutputTokens})`,
+  );
   console.log(
     `[family-classification] distribution: genuine=${dist.genuine ?? 0}, generic=${dist.generic ?? 0}, ambiguous=${dist.ambiguous ?? 0}`,
   );
 
   return {
-    proposals,
-    cost_cents_used: actualCost,
+    proposals: allProposals,
+    cost_cents_used: cumulativeCost,
     estimated_cost_cents,
     aborted_due_to_cost,
   };
