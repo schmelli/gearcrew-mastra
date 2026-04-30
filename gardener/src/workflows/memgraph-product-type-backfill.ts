@@ -228,7 +228,11 @@ const backfillStep = createStep({
     const sampleClassified: z.infer<typeof sampleSchema>[] = [];
     const sampleNone: z.infer<typeof sampleSchema>[] = [];
 
-    const batchSize = inputData.batch_size;
+    // Mastra v3 quirk: Zod .default() is NOT applied to inputData passed to
+    // the step. Use nullish-coalesce as belt-and-braces for all input fields
+    // that have defaults defined in triggerSchema.
+    const batchSize = inputData.batch_size ?? 30;
+    const maxCostCents = inputData.max_cost_cents ?? 1000;
     const totalBatches = Math.ceil(items.length / batchSize);
 
     for (let bi = 0; bi < totalBatches; bi += 1) {
@@ -255,13 +259,12 @@ const backfillStep = createStep({
           }
           processed += 1;
 
+          // Mastra v3 quirk: Zod .default() is NOT applied to inputData passed
+          // to the step. Use nullish-coalesce as belt-and-braces.
+          const threshold = inputData.confidence_threshold ?? 0.7;
           const meetsThreshold =
             cls.suggested_type_name !== null &&
-            cls.confidence >= inputData.confidence_threshold;
-          // DEBUG
-          console.log(
-            `[product-type-backfill] DEBUG cls=${cls.memgraph_id} name=${cls.suggested_type_name} conf=${cls.confidence} threshold=${inputData.confidence_threshold} meets=${meetsThreshold}`,
-          );
+            cls.confidence >= threshold;
 
           if (meetsThreshold && cls.suggested_type_name !== null) {
             classified += 1;
@@ -318,10 +321,10 @@ const backfillStep = createStep({
           `[product-type-backfill] batch ${bi + 1}/${totalBatches} done — processed=${processed} classified=${classified} none=${none} edges=${edgesCreated} cost=${costCents}¢`,
         );
 
-        if (costCents >= inputData.max_cost_cents) {
+        if (costCents >= maxCostCents) {
           abortedDueToCost = true;
           console.warn(
-            `[product-type-backfill] cost cap reached: ${costCents}¢ ≥ ${inputData.max_cost_cents}¢ — aborting`,
+            `[product-type-backfill] cost cap reached: ${costCents}¢ ≥ ${maxCostCents}¢ — aborting`,
           );
           break;
         }
