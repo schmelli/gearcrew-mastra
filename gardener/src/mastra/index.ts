@@ -19,6 +19,7 @@ import { insightMigration } from "../workflows/insight-migration.js";
 import { memgraphProductTypeBackfill } from "../workflows/memgraph-product-type-backfill.js";
 import { memgraphInsightsExtraction } from "../workflows/memgraph-insights-extraction.js";
 import { rerouteFallbackTips } from "../workflows/reroute-fallback-tips.js";
+import { familyCanonical } from "../workflows/family-canonical-names.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -63,6 +64,7 @@ export const mastra = new Mastra({
     memgraphProductTypeBackfill,
     memgraphInsightsExtraction,
     rerouteFallbackTips,
+    familyCanonical,
   },
   server: {
     port,
