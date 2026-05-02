@@ -75,24 +75,34 @@ const matchAndStampStep = createStep({
     const supa = getSupabase();
     const startedAt = new Date().toISOString();
 
-    let query = supa
-      .from("catalog_products")
-      .select(
-        "id, name, product_url, image_url, catalog_brands(name)",
-      )
-      .not("image_url", "is", null)
-      .not("name", "is", null)
-      .order("created_at", { ascending: true });
-    if (inputData.limit) query = query.limit(inputData.limit);
-
-    const { data: rawItems, error: fetchErr } = await query;
-    if (fetchErr) {
-      throw new Error(
-        `[catalog-image-bridge] Supabase fetch failed: ${fetchErr.message}`,
-      );
+    // Supabase JS client paginates via `.range(from, to)` (max 1000 rows per
+    // page by default). We page through all matching rows so the workflow
+    // sees the full catalog, not just the first page.
+    const PAGE = 1000;
+    const cap = inputData.limit ?? Number.MAX_SAFE_INTEGER;
+    const catalog: CatalogRow[] = [];
+    let from = 0;
+    while (catalog.length < cap) {
+      const to = from + Math.min(PAGE, cap - catalog.length) - 1;
+      const { data: page, error: fetchErr } = await supa
+        .from("catalog_products")
+        .select(
+          "id, name, product_url, image_url, catalog_brands(name)",
+        )
+        .not("image_url", "is", null)
+        .not("name", "is", null)
+        .order("created_at", { ascending: true })
+        .range(from, to);
+      if (fetchErr) {
+        throw new Error(
+          `[catalog-image-bridge] Supabase fetch failed at range(${from},${to}): ${fetchErr.message}`,
+        );
+      }
+      const rows = (page ?? []) as unknown as CatalogRow[];
+      catalog.push(...rows);
+      if (rows.length < PAGE) break; // last page
+      from = to + 1;
     }
-
-    const catalog = (rawItems ?? []) as unknown as CatalogRow[];
 
     // Map to the shape expected by findMemgraphMatch.
     const items: Array<SupabaseGearItem & { catalog: CatalogRow }> = catalog
