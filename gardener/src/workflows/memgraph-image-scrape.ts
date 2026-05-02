@@ -78,7 +78,7 @@ RETURN ID(g) AS node_id,
        g.brand AS brand,
        g.name AS name,
        g.product_url AS product_url
-ORDER BY g.bridge_stamped_at DESC NULLS LAST
+ORDER BY g.bridge_stamped_at DESC
 LIMIT $limit
 `;
 
