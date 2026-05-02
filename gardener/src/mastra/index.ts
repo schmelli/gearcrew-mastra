@@ -21,6 +21,7 @@ import { memgraphInsightsExtraction } from "../workflows/memgraph-insights-extra
 import { rerouteFallbackTips } from "../workflows/reroute-fallback-tips.js";
 import { familyCanonical } from "../workflows/family-canonical-names.js";
 import { catalogImageBridge } from "../workflows/catalog-image-bridge.js";
+import { memgraphImageScrape } from "../workflows/memgraph-image-scrape.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -67,6 +68,7 @@ export const mastra = new Mastra({
     rerouteFallbackTips,
     familyCanonical,
     catalogImageBridge,
+    memgraphImageScrape,
   },
   server: {
     port,
