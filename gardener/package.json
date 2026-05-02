@@ -30,7 +30,9 @@
     "bridge:apply": "tsx scripts/run-bridge.ts --mode apply",
     "family-canonical:dry-run-test": "tsx scripts/run-family-canonical.ts --mode dry-run --dry-run-test",
     "family-canonical:dry-run": "tsx scripts/run-family-canonical.ts --mode dry-run",
-    "family-canonical:apply": "tsx scripts/run-family-canonical.ts --mode apply"
+    "family-canonical:apply": "tsx scripts/run-family-canonical.ts --mode apply",
+    "catalog-image-bridge:dry-run": "tsx scripts/run-catalog-image-bridge.ts --mode dry-run",
+    "catalog-image-bridge:apply": "tsx scripts/run-catalog-image-bridge.ts --mode apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

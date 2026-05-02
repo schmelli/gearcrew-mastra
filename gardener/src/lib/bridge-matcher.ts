@@ -155,6 +155,57 @@ export async function stampSupabaseId(
   );
 }
 
+export interface CatalogImagePayload {
+  supabase_id: string;
+  image_url: string | null;
+  product_url: string | null;
+}
+
+export interface CatalogStampOutcome {
+  image_url_set: boolean;
+  product_url_set: boolean;
+}
+
+/**
+ * Stamp catalog data onto a matched Memgraph GearItem.
+ *
+ * COALESCE-semantics: image_url and product_url are written ONLY if the
+ * node currently has them as NULL — Memgraph data wins over catalog data
+ * when both exist. supabase_id is always overwritten.
+ *
+ * Returns flags indicating which fields were actually set, so the caller
+ * can report image-coverage delta accurately. We RETURN the boolean checks
+ * before SET to read pre-state, then SET unconditionally on the COALESCE.
+ */
+export async function stampCatalogImage(
+  session: Session,
+  memgraphNodeId: number,
+  payload: CatalogImagePayload,
+): Promise<CatalogStampOutcome> {
+  const result = await session.run(
+    `MATCH (g:GearItem) WHERE ID(g) = $nodeId
+     WITH g, g.image_url AS prev_image, g.product_url AS prev_url
+     SET g.image_url     = COALESCE(g.image_url, $imageUrl),
+         g.product_url   = COALESCE(g.product_url, $productUrl),
+         g.supabase_id   = $supabaseId,
+         g.bridge_source = 'catalog_products',
+         g.bridge_stamped_at = datetime()
+     RETURN prev_image IS NULL AND $imageUrl IS NOT NULL AS image_set,
+            prev_url   IS NULL AND $productUrl IS NOT NULL AS url_set`,
+    {
+      nodeId: memgraphNodeId,
+      imageUrl: payload.image_url,
+      productUrl: payload.product_url,
+      supabaseId: payload.supabase_id,
+    },
+  );
+  const rec = result.records[0];
+  return {
+    image_url_set: Boolean(rec?.get("image_set")),
+    product_url_set: Boolean(rec?.get("url_set")),
+  };
+}
+
 /**
  * Ensure a Memgraph index exists on :GearItem(supabase_id).
  * Idempotent — `CREATE INDEX IF NOT EXISTS` semantics in Memgraph.
