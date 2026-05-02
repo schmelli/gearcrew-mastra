@@ -79,7 +79,7 @@ RETURN ID(g) AS node_id,
        g.name AS name,
        g.product_url AS product_url
 ORDER BY g.bridge_stamped_at DESC
-LIMIT $limit
+LIMIT toInteger($limit)
 `;
 
 const WRITE_CYPHER = `
