@@ -593,8 +593,12 @@ export interface WeightFetchResult {
     | "firecrawl:json-ld:additional-property"
     | "firecrawl:definition-list"
     | "firecrawl:label-pattern"
+    | "llm:body-prose"
+    | "firecrawl:llm:body-prose"
     | null;
   raw_text?: string;
+  /** "deterministic" for regex/JSON-LD hits, "llm" for LLM-extracted. */
+  confidence?: "deterministic" | "llm";
   error?: string;
 }
 
@@ -621,6 +625,29 @@ export async function fetchProductWeight(
   // that is the exact cohort it is meant to rescue.
   const firecrawlHit = await tryFirecrawlWeight(productUrl);
   if (firecrawlHit) return firecrawlHit;
+
+  // LLM stage: only the cohort that survived all deterministic layers reaches
+  // this point. We extract weight-keyword-windowed snippets (capped to ~3KB
+  // total) and ask Gemini Flash for a structured weight number, with a
+  // hallucination guard that requires the returned source_phrase to contain
+  // a weight-unit token.
+  if (html.ok) {
+    const snippets = extractWeightSnippetsFromHtml(html.body);
+    const llm = await extractWeightWithLlm(snippets);
+    if (llm) {
+      return {
+        weight_grams: llm.weight_grams,
+        source: "llm:body-prose",
+        raw_text: llm.source_phrase,
+        confidence: "llm",
+      };
+    }
+  } else {
+    // Cloudflare/403 path — the only HTML we have is whatever Firecrawl saw,
+    // and tryFirecrawlWeight already failed deterministically. A re-fetch
+    // through Firecrawl just to feed the LLM would double the render cost
+    // and rarely surface anything new; skip the LLM stage in that branch.
+  }
 
   return {
     weight_grams: null,
@@ -710,7 +737,7 @@ function parseWeightToGrams(raw: string): number | null {
 
 function extractWeightFromHtml(html: string): WeightFetchResult | null {
   const ld = extractJsonLdProductWeight(html);
-  if (ld) return ld;
+  if (ld) return { ...ld, confidence: "deterministic" };
 
   const dlPattern =
     /<(dt|th)[^>]*>\s*(?:weight|gewicht)\s*<\/\1>\s*<(dd|td)[^>]*>\s*([^<]+?)\s*<\/\2>/gi;
@@ -722,6 +749,7 @@ function extractWeightFromHtml(html: string): WeightFetchResult | null {
         weight_grams: grams,
         source: "definition-list",
         raw_text: text.slice(0, 50),
+        confidence: "deterministic",
       };
     }
   }
@@ -736,11 +764,174 @@ function extractWeightFromHtml(html: string): WeightFetchResult | null {
         weight_grams: grams,
         source: "label-pattern",
         raw_text: text.slice(0, 50),
+        confidence: "deterministic",
       };
     }
   }
 
   return null;
+}
+
+/**
+ * Strip noise (script/style/nav/header/footer) and extract a list of text
+ * snippets that mention a weight-related keyword, capped to keep total LLM
+ * input under ~3KB. Each snippet is a 200-char window around the keyword
+ * match. If no keyword matches, returns the first ~3KB of body text as a
+ * fallback so the LLM still has something to work with.
+ */
+export function extractWeightSnippetsFromHtml(html: string): string[] {
+  const stripped = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, " ")
+    .replace(/<header[\s\S]*?<\/header>/gi, " ")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const keywordRegex =
+    /\b(?:weight|gewicht|weighs|wiegt|gewichtet|peso)\b/gi;
+  const snippets: string[] = [];
+  const seen = new Set<string>();
+  let totalLen = 0;
+  const MAX_TOTAL = 3000;
+  const WINDOW = 200;
+
+  for (const match of stripped.matchAll(keywordRegex)) {
+    const idx = match.index ?? 0;
+    const start = Math.max(0, idx - 60);
+    const end = Math.min(stripped.length, idx + WINDOW);
+    const snippet = stripped.slice(start, end).trim();
+    if (snippet.length === 0 || seen.has(snippet)) continue;
+    seen.add(snippet);
+    if (totalLen + snippet.length > MAX_TOTAL) break;
+    snippets.push(snippet);
+    totalLen += snippet.length;
+  }
+
+  if (snippets.length === 0) {
+    return [stripped.slice(0, MAX_TOTAL)];
+  }
+  return snippets;
+}
+
+/**
+ * Ask the AI Gateway (default Gemini 2.5 Flash, ~$0.0004/call) to extract a
+ * product weight from text snippets. Returns null on any failure (no key, HTTP
+ * error, malformed JSON, sanity-range violation, missing source phrase).
+ *
+ * Hard guardrails on output:
+ *   - weight_grams must be 1..50_000
+ *   - source_phrase must contain at least one weight-unit token (g/kg/oz/lb)
+ *     — guards against pure hallucination
+ */
+export async function extractWeightWithLlm(
+  snippets: string[],
+): Promise<{ weight_grams: number; source_phrase: string } | null> {
+  const apiKey = process.env.AI_GATEWAY_API_KEY;
+  if (!apiKey) return null;
+  if (snippets.length === 0) return null;
+
+  const baseUrl =
+    process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1";
+  const modelId =
+    process.env.WEIGHT_LLM_MODEL_ID ?? "google/gemini-2.5-flash";
+
+  const userPrompt = `Extract the product's own weight from these page excerpts. Return ONLY a JSON object: {"weight_grams": <integer 1..50000 or null>, "source_phrase": "<exact phrase containing weight, max 60 chars>"}.
+
+Rules:
+- The product's weight, NOT shipping weight, package weight, total weight with accessories, or weight a person can carry.
+- Convert: kg → ×1000, lb → ×453.592, oz → ×28.3495.
+- Pick the most product-canonical mention if multiple exist.
+- If unclear, missing, or only descriptive ("lightweight", "ultralight"), return weight_grams: null.
+
+Excerpts:
+${snippets.map((s, i) => `[${i + 1}] ${s}`).join("\n")}`;
+
+  interface ChatRequestBody {
+    model: string;
+    temperature: number;
+    max_tokens: number;
+    response_format?: { type: "json_object" };
+    messages: Array<{ role: "system" | "user"; content: string }>;
+  }
+  const body: ChatRequestBody = {
+    model: modelId,
+    temperature: 0,
+    max_tokens: 200,
+    messages: [
+      {
+        role: "system",
+        content:
+          'You extract product weight from web page excerpts. Output JSON only, no markdown fence. Schema: {"weight_grams": number|null, "source_phrase": string}.',
+      },
+      { role: "user", content: userPrompt },
+    ],
+  };
+  if (!modelId.startsWith("google/")) {
+    body.response_format = { type: "json_object" };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = json.choices?.[0]?.message?.content?.trim();
+    if (!content) return null;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenced && fenced[1]) {
+        try {
+          parsed = JSON.parse(fenced[1]);
+        } catch {
+          return null;
+        }
+      } else {
+        const objMatch = content.match(/\{[\s\S]*\}/);
+        if (!objMatch) return null;
+        try {
+          parsed = JSON.parse(objMatch[0]);
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    if (!parsed || typeof parsed !== "object") return null;
+    const obj = parsed as Record<string, unknown>;
+    const w = obj.weight_grams;
+    const phrase = obj.source_phrase;
+    if (typeof w !== "number" || !Number.isFinite(w)) return null;
+    if (w < 1 || w > 50_000) return null;
+    const rounded = Math.round(w);
+    if (typeof phrase !== "string" || phrase.length === 0) return null;
+    // Hallucination guard: phrase must contain a weight-unit token.
+    if (!/\b(?:g(?:rams?)?|kg|oz|lbs?|pounds?)\b/i.test(phrase)) return null;
+    return { weight_grams: rounded, source_phrase: phrase.slice(0, 60) };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function extractJsonLdProductWeight(html: string): WeightFetchResult | null {

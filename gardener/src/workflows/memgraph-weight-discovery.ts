@@ -82,6 +82,7 @@ const WRITE_CYPHER = `
 MATCH (g:GearItem) WHERE ID(g) = $nodeId
 SET g.weight_grams = $weightGrams,
     g.weight_source = $source,
+    g.weight_confidence = $confidence,
     g.weight_discovered_at = datetime()
 `;
 
@@ -151,6 +152,7 @@ const discoverStep = createStep({
                     nodeId: c.node_id,
                     weightGrams: result.weight_grams,
                     source: result.source,
+                    confidence: result.confidence ?? "deterministic",
                   });
                   written += 1;
                 } catch (err) {
