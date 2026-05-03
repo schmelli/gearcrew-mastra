@@ -139,6 +139,48 @@ function pickThumbnail(thumbnails: Thumbnails | undefined): string | undefined {
 // ---------------------------------------------------------------------------
 
 /**
+ * Fetch a specific list of videos by their YouTube video IDs.
+ *
+ * Used by the ingest workflow when running against an explicit `videoIds`
+ * override (manual single-video trigger). Bypasses the playlistItems
+ * pagination entirely and goes straight to the videos endpoint, which
+ * returns full snippet (incl. full-text description), contentDetails,
+ * and statistics in a single batched call.
+ */
+export async function fetchVideosByIds(videoIds: string[]): Promise<PlaylistVideo[]> {
+  const out: PlaylistVideo[] = [];
+  if (videoIds.length === 0) return out;
+
+  for (let i = 0; i < videoIds.length; i += PAGE_SIZE) {
+    const batch = videoIds.slice(i, i + PAGE_SIZE);
+    const detailsResponse = await youtubeFetch<VideosResponse>("/videos", {
+      part: "contentDetails,snippet,statistics",
+      id: batch.join(","),
+    });
+
+    for (const detail of detailsResponse.items ?? []) {
+      if (!detail.id) continue;
+      const durationSeconds = parseIsoDuration(detail.contentDetails?.duration);
+      const viewCountRaw = detail.statistics?.viewCount;
+      const viewCountParsed = viewCountRaw ? Number(viewCountRaw) : NaN;
+
+      out.push({
+        videoId: detail.id,
+        title: detail.snippet?.title ?? "",
+        description: detail.snippet?.description ?? "",
+        channelTitle: detail.snippet?.channelTitle ?? "",
+        publishedAt: detail.snippet?.publishedAt ?? "",
+        thumbnailUrl: pickThumbnail(detail.snippet?.thumbnails),
+        durationSeconds: durationSeconds,
+        viewCount: Number.isFinite(viewCountParsed) ? viewCountParsed : undefined,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Fetch all videos in a playlist, paginating through every page,
  * then enrich each entry with duration + view counts via the videos endpoint.
  */

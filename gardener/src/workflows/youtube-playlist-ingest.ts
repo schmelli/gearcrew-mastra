@@ -21,6 +21,7 @@ import {
 } from "../lib/supabase.js";
 import {
   fetchPlaylistVideos,
+  fetchVideosByIds,
   type PlaylistVideo,
 } from "../tools/youtube-data-api.js";
 import {
@@ -40,6 +41,9 @@ const TUBEONAI_CONCURRENCY = 5;
 
 const triggerSchema = z.object({
   playlistId: z.string().default(DEFAULT_PLAYLIST_ID),
+  // When set, the playlist fetch is skipped entirely and only these video IDs
+  // are processed. Used for manual single-video triggers and re-extracts.
+  videoIds: z.array(z.string().min(1)).optional(),
   limit: z.number().int().positive().optional(),
   dryRun: z.boolean().default(false),
   force: z.boolean().default(false),
@@ -106,17 +110,39 @@ const summaryOutputSchema = z.object({
 
 const fetchPlaylist = createStep({
   id: "fetch-playlist",
-  description: "Fetch all videos from the YouTube playlist via Data API v3",
+  description:
+    "Fetch videos via Data API v3 — either from a playlist or from an explicit videoIds list",
   inputSchema: triggerSchema,
   outputSchema: fetchOutputSchema,
   execute: async ({ inputData }) => {
     const playlistId = inputData.playlistId;
-    const allVideos = await fetchPlaylistVideos(playlistId);
-    const videos = inputData.limit ? allVideos.slice(0, inputData.limit) : allVideos;
+    let allVideos: PlaylistVideo[];
 
-    console.log(
-      `[youtube-ingest] Playlist ${playlistId}: ${allVideos.length} videos total, ${videos.length} after limit`,
-    );
+    if (inputData.videoIds && inputData.videoIds.length > 0) {
+      // Manual single/multi-video trigger — skip playlist pagination entirely.
+      allVideos = await fetchVideosByIds(inputData.videoIds);
+      const missing = inputData.videoIds.filter(
+        (id) => !allVideos.some((v) => v.videoId === id),
+      );
+      if (missing.length > 0) {
+        console.warn(
+          `[youtube-ingest] videoIds override: ${missing.length} ids not returned by videos.list (private/deleted/typo): ${missing.join(", ")}`,
+        );
+      }
+      console.log(
+        `[youtube-ingest] videoIds override: requested=${inputData.videoIds.length} fetched=${allVideos.length}`,
+      );
+    } else {
+      allVideos = await fetchPlaylistVideos(playlistId);
+      console.log(
+        `[youtube-ingest] Playlist ${playlistId}: ${allVideos.length} videos total`,
+      );
+    }
+
+    const videos = inputData.limit ? allVideos.slice(0, inputData.limit) : allVideos;
+    if (inputData.limit) {
+      console.log(`[youtube-ingest] After --limit: ${videos.length} videos`);
+    }
 
     return {
       playlistId,
