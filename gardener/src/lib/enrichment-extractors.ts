@@ -274,7 +274,12 @@ export async function extractWeightWithGemini(
 
 export interface ImageFetchResult {
   image_url: string | null;
-  source: "og:image" | "itemprop:image" | null;
+  source:
+    | "og:image"
+    | "itemprop:image"
+    | "twitter:image"
+    | "json-ld:product"
+    | null;
   error?: string;
 }
 
@@ -406,7 +411,105 @@ export async function fetchOgImage(
     }
   }
 
+  // twitter:image fallback — many JS-rendered sites set this even when og:image
+  // is missing from the initial HTML.
+  const twitterPatterns = [
+    /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
+    /<meta[^>]+property=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+  ];
+  for (const pat of twitterPatterns) {
+    const found = extractMetaContent(html, pat);
+    if (found) {
+      const resolved = resolveUrl(found, parsedUrl);
+      if (resolved) return { image_url: resolved, source: "twitter:image" };
+    }
+  }
+
+  // JSON-LD Product schema fallback — modern e-commerce sites (REI, Patagonia,
+  // Hoka, Arc'teryx, etc.) embed full product data as <script type="application/ld+json">.
+  // This is by far the highest-coverage signal for SPA-rendered storefronts.
+  const jsonLdImage = extractJsonLdProductImage(html);
+  if (jsonLdImage) {
+    const resolved = resolveUrl(jsonLdImage, parsedUrl);
+    if (resolved) return { image_url: resolved, source: "json-ld:product" };
+  }
+
   return { image_url: null, source: null, error: "no_og_image_found" };
+}
+
+/**
+ * Walk every <script type="application/ld+json"> block in the HTML, JSON.parse it,
+ * and return the first image URL found on a Product-typed entity.
+ *
+ * Handles three real-world shapes:
+ *   1. Single Product object: { "@type": "Product", "image": "..." }
+ *   2. @graph array: { "@graph": [{ "@type": "Product", "image": ... }, ...] }
+ *   3. image as array: "image": ["url1", "url2"] — pick first.
+ *
+ * Bad JSON in any single block is swallowed (sites occasionally ship malformed
+ * LD); the next block still gets a chance.
+ */
+function extractJsonLdProductImage(html: string): string | null {
+  const scriptRegex =
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  const matches = html.matchAll(scriptRegex);
+
+  for (const match of matches) {
+    const raw = match[1]?.trim();
+    if (!raw) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+
+    const candidates: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+    for (const c of candidates) {
+      const found = pickProductImage(c);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function pickProductImage(node: unknown): string | null {
+  if (!node || typeof node !== "object") return null;
+  const obj = node as Record<string, unknown>;
+
+  // @graph: walk children
+  const graph = obj["@graph"];
+  if (Array.isArray(graph)) {
+    for (const child of graph) {
+      const found = pickProductImage(child);
+      if (found) return found;
+    }
+  }
+
+  // Recognize Product type (@type can be string or array)
+  const type = obj["@type"];
+  const isProduct =
+    type === "Product" ||
+    (Array.isArray(type) && type.includes("Product"));
+  if (!isProduct) return null;
+
+  const img = obj.image;
+  if (typeof img === "string" && img.length > 0) return img;
+  if (Array.isArray(img)) {
+    for (const i of img) {
+      if (typeof i === "string" && i.length > 0) return i;
+      if (i && typeof i === "object") {
+        const url = (i as Record<string, unknown>).url;
+        if (typeof url === "string" && url.length > 0) return url;
+      }
+    }
+  }
+  if (img && typeof img === "object") {
+    const url = (img as Record<string, unknown>).url;
+    if (typeof url === "string" && url.length > 0) return url;
+  }
+  return null;
 }
 
 function resolveUrl(raw: string, base: URL): string | null {
