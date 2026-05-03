@@ -490,8 +490,16 @@ async function tryFirecrawlImage(
     | "firecrawl:twitter:image"
     | "firecrawl:json-ld:product";
 } | null> {
-  const apiBase = process.env.FIRECRAWL_API_URL ?? "http://firecrawl-api:3002";
-  const apiKey = process.env.FIRECRAWL_API_KEY;
+  // Prefer the on-host self-hosted Firecrawl over the cloud variant — it is
+  // already running on this VPS at firecrawl-api:3002 and does not bill per
+  // request. Cloud is the fallback when self-hosted env vars are missing.
+  const apiBase =
+    process.env.FIRECRAWL_API_URL ??
+    (process.env.FIRECRAWL_SELF_HOSTED_KEY
+      ? "http://firecrawl-api:3002"
+      : process.env.FIRECRAWL_SELF_HOSTED_URL ?? "https://api.firecrawl.dev");
+  const apiKey =
+    process.env.FIRECRAWL_SELF_HOSTED_KEY ?? process.env.FIRECRAWL_API_KEY;
   if (!apiKey) return null;
 
   const controller = new AbortController();
@@ -899,8 +907,16 @@ function pickProductWeight(node: unknown): WeightFetchResult | null {
 async function tryFirecrawlWeight(
   productUrl: string,
 ): Promise<WeightFetchResult | null> {
-  const apiBase = process.env.FIRECRAWL_API_URL ?? "http://firecrawl-api:3002";
-  const apiKey = process.env.FIRECRAWL_API_KEY;
+  // Prefer the on-host self-hosted Firecrawl over the cloud variant — it is
+  // already running on this VPS at firecrawl-api:3002 and does not bill per
+  // request. Cloud is the fallback when self-hosted env vars are missing.
+  const apiBase =
+    process.env.FIRECRAWL_API_URL ??
+    (process.env.FIRECRAWL_SELF_HOSTED_KEY
+      ? "http://firecrawl-api:3002"
+      : process.env.FIRECRAWL_SELF_HOSTED_URL ?? "https://api.firecrawl.dev");
+  const apiKey =
+    process.env.FIRECRAWL_SELF_HOSTED_KEY ?? process.env.FIRECRAWL_API_KEY;
   if (!apiKey) return null;
 
   const controller = new AbortController();
