@@ -1,22 +1,19 @@
-version: '3.8'
+# Gardener-only stack.
+#
+# Memgraph is NOT defined here — it runs as part of the separate
+# `memgraph-platform` stack on this host (alongside memgraph-lab and
+# mcp-memgraph). We attach the gardener container to that stack's network
+# (`memgraph-platform_memgraph-net`) as an `external` network so the
+# `bolt://memgraph:7687` hostname resolves consistently after every rebuild.
+#
+# Why this matters: a previous compose definition spun up its own memgraph
+# service that was never used (the external one was already in production).
+# Every time the gardener was rebuilt with `docker compose up -d --no-deps
+# --build gardener`, it landed on its own bridge network and lost DNS for
+# `memgraph`, requiring a manual `docker network connect`. Declaring the
+# external network here makes that connection part of the spec.
 
 services:
-  memgraph:
-    image: memgraph/memgraph-mage:latest
-    container_name: geargraph-memgraph
-    ports:
-      - "7687:7687"
-      - "7444:7444"
-    volumes:
-      - memgraph_data:/var/lib/memgraph
-    environment:
-      - MEMGRAPH_USER=memgraph
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "7687"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   gardener:
     build: ./gardener
     env_file: .env
@@ -30,10 +27,13 @@ services:
       # memgraph-platform stack (correct password lives in .env).
       - NODE_ENV=production
       - PORT=4111
-    depends_on:
-      memgraph:
-        condition: service_healthy
+    networks:
+      - default
+      - memgraph-net
     restart: unless-stopped
 
-volumes:
-  memgraph_data:
+networks:
+  default:
+  memgraph-net:
+    name: memgraph-platform_memgraph-net
+    external: true
