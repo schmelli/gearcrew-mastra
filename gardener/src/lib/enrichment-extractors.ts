@@ -319,91 +319,31 @@ export async function fetchOgImage(
     return { image_url: null, source: null, error: "non_http_protocol" };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-
-  let html: string;
-  try {
-    const res = await fetch(productUrl, {
-      method: "GET",
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.8",
-      },
-      signal: controller.signal,
-      redirect: "follow",
-    });
-
-    if (!res.ok) {
-      return {
-        image_url: null,
-        source: null,
-        error: `http_${res.status}`,
-      };
+  // Stage 1: cheap static fetch. If the static response yields a usable image
+  // tag we are done and skip the Firecrawl render entirely.
+  const html = await fetchHtml(productUrl);
+  if (html.ok) {
+    const staticHit = extractImageFromHtml(html.body, parsedUrl);
+    if (staticHit) {
+      return { image_url: staticHit.url, source: staticHit.source };
     }
-
-    const ctype = res.headers.get("content-type") ?? "";
-    if (!ctype.includes("text/html") && !ctype.includes("application/xhtml")) {
-      return {
-        image_url: null,
-        source: null,
-        error: `non_html_content_type: ${ctype.slice(0, 50)}`,
-      };
-    }
-
-    // Cap to first 256KB — og:image is in <head>, no need to read full page.
-    const reader = res.body?.getReader();
-    if (!reader) {
-      html = await res.text();
-    } else {
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      const MAX_BYTES = 256 * 1024;
-      while (total < MAX_BYTES) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        total += value.length;
-      }
-      try {
-        await reader.cancel();
-      } catch {
-        // ignore
-      }
-      html = new TextDecoder("utf-8", { fatal: false }).decode(
-        Buffer.concat(chunks.map((c) => Buffer.from(c))),
-      );
-    }
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    return {
-      image_url: null,
-      source: null,
-      error: `fetch_failed: ${reason.slice(0, 100)}`,
-    };
-  } finally {
-    clearTimeout(timer);
   }
 
-  const staticHit = extractImageFromHtml(html, parsedUrl);
-  if (staticHit) {
-    return { image_url: staticHit.url, source: staticHit.source };
-  }
-
-  // Final fallback: re-fetch through the local Firecrawl service which JS-renders
-  // the page. Many modern outdoor-brand sites (Garmin, Jetboil, Brooks, Exped,
-  // Katadyn, mid-tier shops) ship their product image only after hydration.
-  // Cloudflare-protected sites (REI, Hoka, Patagonia, Arc'teryx) are NOT rescued
-  // by this — Firecrawl is also blocked there. That cohort needs a paid stealth
-  // proxy or domain-aware extractor; keep that out of this fallback to avoid
-  // wasting render budget on guaranteed-failure URLs.
+  // Stage 2: Firecrawl fallback. Critically, this runs even when the static
+  // fetch returned an HTTP error (403/429/Cloudflare/etc.) — that is exactly
+  // the cohort Firecrawl is meant to rescue, since the local Firecrawl
+  // container does its own request through a render context that often
+  // sails past the static-fetch failure modes.
   const firecrawlHit = await tryFirecrawlImage(productUrl, parsedUrl);
   if (firecrawlHit) {
     return { image_url: firecrawlHit.url, source: firecrawlHit.source };
   }
 
-  return { image_url: null, source: null, error: "no_og_image_found" };
+  return {
+    image_url: null,
+    source: null,
+    error: html.ok ? "no_og_image_found" : html.error,
+  };
 }
 
 interface ExtractedImage {
@@ -672,17 +612,21 @@ export async function fetchProductWeight(
   }
 
   const html = await fetchHtml(productUrl);
-  if (!html.ok) {
-    return { weight_grams: null, source: null, error: html.error };
+  if (html.ok) {
+    const staticHit = extractWeightFromHtml(html.body);
+    if (staticHit) return staticHit;
   }
 
-  const staticHit = extractWeightFromHtml(html.body);
-  if (staticHit) return staticHit;
-
+  // Firecrawl runs even on static-fetch HTTP errors (403/429/Cloudflare) —
+  // that is the exact cohort it is meant to rescue.
   const firecrawlHit = await tryFirecrawlWeight(productUrl);
   if (firecrawlHit) return firecrawlHit;
 
-  return { weight_grams: null, source: null, error: "no_weight_found" };
+  return {
+    weight_grams: null,
+    source: null,
+    error: html.ok ? "no_weight_found" : html.error,
+  };
 }
 
 async function fetchHtml(
