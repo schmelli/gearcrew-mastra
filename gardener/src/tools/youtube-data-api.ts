@@ -207,7 +207,9 @@ export async function fetchPlaylistVideos(playlistId: string): Promise<PlaylistV
 
       // Fill in any snippet fields that were missing on the playlistItems entry
       if (!video.title && detail.snippet?.title) video.title = detail.snippet.title;
-      if (!video.description && detail.snippet?.description) {
+      // Always prefer the videos.list description — playlistItems.snippet.description
+      // can be truncated for some channels, while videos.list returns the full body.
+      if (detail.snippet?.description) {
         video.description = detail.snippet.description;
       }
       if (!video.channelTitle && detail.snippet?.channelTitle) {
