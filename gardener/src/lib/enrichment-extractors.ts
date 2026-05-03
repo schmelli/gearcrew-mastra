@@ -279,6 +279,9 @@ export interface ImageFetchResult {
     | "itemprop:image"
     | "twitter:image"
     | "json-ld:product"
+    | "firecrawl:og:image"
+    | "firecrawl:twitter:image"
+    | "firecrawl:json-ld:product"
     | null;
   error?: string;
 }
@@ -383,7 +386,44 @@ export async function fetchOgImage(
     clearTimeout(timer);
   }
 
-  // og:image — try property="og:image" and property='og:image' and any order.
+  const staticHit = extractImageFromHtml(html, parsedUrl);
+  if (staticHit) {
+    return { image_url: staticHit.url, source: staticHit.source };
+  }
+
+  // Final fallback: re-fetch through the local Firecrawl service which JS-renders
+  // the page. Many modern outdoor-brand sites (Garmin, Jetboil, Brooks, Exped,
+  // Katadyn, mid-tier shops) ship their product image only after hydration.
+  // Cloudflare-protected sites (REI, Hoka, Patagonia, Arc'teryx) are NOT rescued
+  // by this — Firecrawl is also blocked there. That cohort needs a paid stealth
+  // proxy or domain-aware extractor; keep that out of this fallback to avoid
+  // wasting render budget on guaranteed-failure URLs.
+  const firecrawlHit = await tryFirecrawlImage(productUrl, parsedUrl);
+  if (firecrawlHit) {
+    return { image_url: firecrawlHit.url, source: firecrawlHit.source };
+  }
+
+  return { image_url: null, source: null, error: "no_og_image_found" };
+}
+
+interface ExtractedImage {
+  url: string;
+  source:
+    | "og:image"
+    | "itemprop:image"
+    | "twitter:image"
+    | "json-ld:product";
+}
+
+/**
+ * Walk an HTML string and return the first image hit from the priority chain:
+ * og:image → itemprop=image → twitter:image → JSON-LD Product.
+ * Caller is responsible for resolving the URL against `baseUrl`.
+ */
+function extractImageFromHtml(
+  html: string,
+  baseUrl: URL,
+): ExtractedImage | null {
   const ogPatterns = [
     /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
     /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
@@ -391,13 +431,11 @@ export async function fetchOgImage(
   for (const pat of ogPatterns) {
     const found = extractMetaContent(html, pat);
     if (found) {
-      const resolved = resolveUrl(found, parsedUrl);
-      if (resolved)
-        return { image_url: resolved, source: "og:image" };
+      const resolved = resolveUrl(found, baseUrl);
+      if (resolved) return { url: resolved, source: "og:image" };
     }
   }
 
-  // itemprop=image fallback
   const itempropPatterns = [
     /<meta[^>]+itemprop=["']image["'][^>]+content=["']([^"']+)["']/i,
     /<meta[^>]+content=["']([^"']+)["'][^>]+itemprop=["']image["']/i,
@@ -405,14 +443,11 @@ export async function fetchOgImage(
   for (const pat of itempropPatterns) {
     const found = extractMetaContent(html, pat);
     if (found) {
-      const resolved = resolveUrl(found, parsedUrl);
-      if (resolved)
-        return { image_url: resolved, source: "itemprop:image" };
+      const resolved = resolveUrl(found, baseUrl);
+      if (resolved) return { url: resolved, source: "itemprop:image" };
     }
   }
 
-  // twitter:image fallback — many JS-rendered sites set this even when og:image
-  // is missing from the initial HTML.
   const twitterPatterns = [
     /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
     /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
@@ -421,21 +456,91 @@ export async function fetchOgImage(
   for (const pat of twitterPatterns) {
     const found = extractMetaContent(html, pat);
     if (found) {
-      const resolved = resolveUrl(found, parsedUrl);
-      if (resolved) return { image_url: resolved, source: "twitter:image" };
+      const resolved = resolveUrl(found, baseUrl);
+      if (resolved) return { url: resolved, source: "twitter:image" };
     }
   }
 
-  // JSON-LD Product schema fallback — modern e-commerce sites (REI, Patagonia,
-  // Hoka, Arc'teryx, etc.) embed full product data as <script type="application/ld+json">.
-  // This is by far the highest-coverage signal for SPA-rendered storefronts.
   const jsonLdImage = extractJsonLdProductImage(html);
   if (jsonLdImage) {
-    const resolved = resolveUrl(jsonLdImage, parsedUrl);
-    if (resolved) return { image_url: resolved, source: "json-ld:product" };
+    const resolved = resolveUrl(jsonLdImage, baseUrl);
+    if (resolved) return { url: resolved, source: "json-ld:product" };
   }
 
-  return { image_url: null, source: null, error: "no_og_image_found" };
+  return null;
+}
+
+/**
+ * Try the local Firecrawl service (selfhosted at http://firecrawl-api:3002).
+ *
+ * Returns null on any failure — including HTTP errors, missing API key, empty
+ * HTML body, or Cloudflare blocks. Cost on the local instance is zero, but
+ * each call still spends a render slot, so we cap waitFor at 2s.
+ *
+ * Source tag is prefixed with "firecrawl:" so failure-mode breakdowns make it
+ * obvious which extraction layer the URL came from.
+ */
+async function tryFirecrawlImage(
+  productUrl: string,
+  baseUrl: URL,
+): Promise<{
+  url: string;
+  source:
+    | "firecrawl:og:image"
+    | "firecrawl:twitter:image"
+    | "firecrawl:json-ld:product";
+} | null> {
+  const apiBase = process.env.FIRECRAWL_API_URL ?? "http://firecrawl-api:3002";
+  const apiKey = process.env.FIRECRAWL_API_KEY;
+  if (!apiKey) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+
+  try {
+    const res = await fetch(`${apiBase}/v1/scrape`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        url: productUrl,
+        formats: ["rawHtml"],
+        waitFor: 2000,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      success?: boolean;
+      data?: { rawHtml?: string };
+    };
+    if (!json.success) return null;
+    const html = json.data?.rawHtml ?? "";
+    if (html.length === 0) return null;
+
+    const hit = extractImageFromHtml(html, baseUrl);
+    if (!hit) return null;
+    if (hit.source === "itemprop:image") {
+      // itemprop is rarely the right product image once hydrated; treat it as
+      // a weak signal and bail rather than store a low-quality result. If real
+      // demand emerges we can promote it later.
+      return null;
+    }
+    return {
+      url: hit.url,
+      source: `firecrawl:${hit.source}` as
+        | "firecrawl:og:image"
+        | "firecrawl:twitter:image"
+        | "firecrawl:json-ld:product",
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -522,5 +627,317 @@ function resolveUrl(raw: string, base: URL): string | null {
     return new URL(raw, base).toString();
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Weight extractor (HTML → grams)
+// ---------------------------------------------------------------------------
+
+export interface WeightFetchResult {
+  weight_grams: number | null;
+  source:
+    | "json-ld:weight"
+    | "json-ld:additional-property"
+    | "definition-list"
+    | "label-pattern"
+    | "firecrawl:json-ld:weight"
+    | "firecrawl:json-ld:additional-property"
+    | "firecrawl:definition-list"
+    | "firecrawl:label-pattern"
+    | null;
+  raw_text?: string;
+  error?: string;
+}
+
+export async function fetchProductWeight(
+  productUrl: string,
+): Promise<WeightFetchResult> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(productUrl);
+  } catch {
+    return { weight_grams: null, source: null, error: "invalid_url" };
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return { weight_grams: null, source: null, error: "non_http_protocol" };
+  }
+
+  const html = await fetchHtml(productUrl);
+  if (!html.ok) {
+    return { weight_grams: null, source: null, error: html.error };
+  }
+
+  const staticHit = extractWeightFromHtml(html.body);
+  if (staticHit) return staticHit;
+
+  const firecrawlHit = await tryFirecrawlWeight(productUrl);
+  if (firecrawlHit) return firecrawlHit;
+
+  return { weight_grams: null, source: null, error: "no_weight_found" };
+}
+
+async function fetchHtml(
+  productUrl: string,
+): Promise<{ ok: true; body: string } | { ok: false; error: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(productUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.8",
+      },
+      signal: controller.signal,
+      redirect: "follow",
+    });
+
+    if (!res.ok) return { ok: false, error: `http_${res.status}` };
+    const ctype = res.headers.get("content-type") ?? "";
+    if (!ctype.includes("text/html") && !ctype.includes("application/xhtml")) {
+      return {
+        ok: false,
+        error: `non_html_content_type: ${ctype.slice(0, 50)}`,
+      };
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) return { ok: true, body: await res.text() };
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    const MAX_BYTES = 256 * 1024;
+    while (total < MAX_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.length;
+    }
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
+    return {
+      ok: true,
+      body: new TextDecoder("utf-8", { fatal: false }).decode(
+        Buffer.concat(chunks.map((c) => Buffer.from(c))),
+      ),
+    };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `fetch_failed: ${reason.slice(0, 100)}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseWeightToGrams(raw: string): number | null {
+  const m = raw
+    .replace(/,/g, ".")
+    .match(/(\d+(?:\.\d+)?)\s*(g(?:rams?)?|kg|oz|lbs?|pounds?)\b/i);
+  if (!m) return null;
+  const value = parseFloat(m[1] ?? "0");
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const unit = (m[2] ?? "").toLowerCase();
+
+  let grams: number;
+  if (unit.startsWith("kg")) grams = value * 1000;
+  else if (unit.startsWith("g")) grams = value;
+  else if (unit === "oz") grams = value * 28.3495;
+  else if (unit.startsWith("lb") || unit.startsWith("pound"))
+    grams = value * 453.592;
+  else return null;
+
+  const rounded = Math.round(grams);
+  if (rounded < 1 || rounded > 50_000) return null;
+  return rounded;
+}
+
+function extractWeightFromHtml(html: string): WeightFetchResult | null {
+  const ld = extractJsonLdProductWeight(html);
+  if (ld) return ld;
+
+  const dlPattern =
+    /<(dt|th)[^>]*>\s*(?:weight|gewicht)\s*<\/\1>\s*<(dd|td)[^>]*>\s*([^<]+?)\s*<\/\2>/gi;
+  for (const match of html.matchAll(dlPattern)) {
+    const text = match[3] ?? "";
+    const grams = parseWeightToGrams(text);
+    if (grams !== null) {
+      return {
+        weight_grams: grams,
+        source: "definition-list",
+        raw_text: text.slice(0, 50),
+      };
+    }
+  }
+
+  const labelPattern =
+    /(^|[\s>(])(?:weight|gewicht|gross\s*weight)\s*[:=]\s*([^<\n]{1,30})/gi;
+  for (const match of html.matchAll(labelPattern)) {
+    const text = match[2] ?? "";
+    const grams = parseWeightToGrams(text);
+    if (grams !== null) {
+      return {
+        weight_grams: grams,
+        source: "label-pattern",
+        raw_text: text.slice(0, 50),
+      };
+    }
+  }
+
+  return null;
+}
+
+function extractJsonLdProductWeight(html: string): WeightFetchResult | null {
+  const scriptRegex =
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  for (const match of html.matchAll(scriptRegex)) {
+    const raw = match[1]?.trim();
+    if (!raw) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const candidates: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+    for (const c of candidates) {
+      const found = pickProductWeight(c);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function pickProductWeight(node: unknown): WeightFetchResult | null {
+  if (!node || typeof node !== "object") return null;
+  const obj = node as Record<string, unknown>;
+
+  const graph = obj["@graph"];
+  if (Array.isArray(graph)) {
+    for (const child of graph) {
+      const found = pickProductWeight(child);
+      if (found) return found;
+    }
+  }
+
+  const type = obj["@type"];
+  const isProduct =
+    type === "Product" ||
+    (Array.isArray(type) && type.includes("Product"));
+  if (!isProduct) return null;
+
+  const w = obj.weight;
+  if (w && typeof w === "object") {
+    const wObj = w as Record<string, unknown>;
+    const value = Number(wObj.value);
+    const unit = String(wObj.unitCode ?? wObj.unitText ?? "").toUpperCase();
+    if (Number.isFinite(value)) {
+      let grams: number | null = null;
+      if (unit === "GRM" || unit === "G") grams = value;
+      else if (unit === "KGM" || unit === "KG") grams = value * 1000;
+      else if (unit === "ONZ" || unit === "OZ") grams = value * 28.3495;
+      else if (unit === "LBR" || unit === "LB" || unit === "LBS")
+        grams = value * 453.592;
+      if (grams !== null) {
+        const rounded = Math.round(grams);
+        if (rounded >= 1 && rounded <= 50_000) {
+          return {
+            weight_grams: rounded,
+            source: "json-ld:weight",
+            raw_text: `${value} ${unit}`,
+          };
+        }
+      }
+    }
+  }
+  if (typeof w === "string") {
+    const grams = parseWeightToGrams(w);
+    if (grams !== null) {
+      return {
+        weight_grams: grams,
+        source: "json-ld:weight",
+        raw_text: w.slice(0, 50),
+      };
+    }
+  }
+
+  const ap = obj.additionalProperty;
+  const apList = Array.isArray(ap) ? ap : ap ? [ap] : [];
+  for (const entry of apList) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const name = String(e.name ?? "").toLowerCase();
+    if (!/weight|gewicht/.test(name)) continue;
+    const valueRaw = e.value;
+    if (typeof valueRaw === "string") {
+      const grams = parseWeightToGrams(valueRaw);
+      if (grams !== null) {
+        return {
+          weight_grams: grams,
+          source: "json-ld:additional-property",
+          raw_text: valueRaw.slice(0, 50),
+        };
+      }
+    } else if (typeof valueRaw === "number") {
+      if (valueRaw >= 1 && valueRaw <= 50_000) {
+        return {
+          weight_grams: Math.round(valueRaw),
+          source: "json-ld:additional-property",
+          raw_text: `${valueRaw}`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+async function tryFirecrawlWeight(
+  productUrl: string,
+): Promise<WeightFetchResult | null> {
+  const apiBase = process.env.FIRECRAWL_API_URL ?? "http://firecrawl-api:3002";
+  const apiKey = process.env.FIRECRAWL_API_KEY;
+  if (!apiKey) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch(`${apiBase}/v1/scrape`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        url: productUrl,
+        formats: ["rawHtml"],
+        waitFor: 2000,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      success?: boolean;
+      data?: { rawHtml?: string };
+    };
+    if (!json.success) return null;
+    const html = json.data?.rawHtml ?? "";
+    if (html.length === 0) return null;
+
+    const hit = extractWeightFromHtml(html);
+    if (!hit) return null;
+    return {
+      weight_grams: hit.weight_grams,
+      source: ("firecrawl:" + hit.source) as WeightFetchResult["source"],
+      raw_text: hit.raw_text,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }

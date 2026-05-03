@@ -23,6 +23,7 @@ import { familyCanonical } from "../workflows/family-canonical-names.js";
 import { catalogImageBridge } from "../workflows/catalog-image-bridge.js";
 import { memgraphImageScrape } from "../workflows/memgraph-image-scrape.js";
 import { memgraphUrlDiscovery } from "../workflows/memgraph-url-discovery.js";
+import { memgraphWeightDiscovery } from "../workflows/memgraph-weight-discovery.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 const port = parseInt(process.env.PORT || "4111", 10);
@@ -71,6 +72,7 @@ export const mastra = new Mastra({
     catalogImageBridge,
     memgraphImageScrape,
     memgraphUrlDiscovery,
+    memgraphWeightDiscovery,
   },
   server: {
     port,

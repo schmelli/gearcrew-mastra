@@ -230,7 +230,14 @@ export async function applyImageUpdate(
   itemName: string,
   imageUrl: string,
   sourceUrl: string,
-  source: "og:image" | "itemprop:image" | "twitter:image" | "json-ld:product",
+  source:
+    | "og:image"
+    | "itemprop:image"
+    | "twitter:image"
+    | "json-ld:product"
+    | "firecrawl:og:image"
+    | "firecrawl:twitter:image"
+    | "firecrawl:json-ld:product",
   workflowRunId: string,
 ): Promise<ApplyResult> {
   const supa = getSupabase();
