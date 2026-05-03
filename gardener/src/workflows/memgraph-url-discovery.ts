@@ -1,18 +1,24 @@
 /**
  * Memgraph URL Discovery Workflow ("Klebefalle"-Aufwertung Phase 1)
  *
- * For every :GearItem in Memgraph that has neither product_url nor image_url
- * (the "naked" items that landed in the graph from a YouTube/article mention
- * but were never enriched), runs a Serper Google-search to discover the most
- * likely manufacturer/retailer product URL and stamps it onto the node.
+ * For every :GearItem in Memgraph that is missing a product_url, runs a
+ * Serper Google-search to discover the most likely manufacturer/retailer
+ * product URL and stamps it onto the node.
+ *
+ * The candidate filter is intentionally NOT gated on image_url: the catalog-
+ * image-bridge has historically enriched ~1.5k items with an image_url from
+ * `catalog_products` without a corresponding product_url. Those items still
+ * need URL discovery — they are not "fully enriched" just because an image
+ * exists. The image and the URL come from independent sources (catalog match
+ * vs. manufacturer search).
  *
  * Combined with `memgraphImageScrape`, this turns the graph into a self-
  * healing system: any item that gets mentioned anywhere → trapped in the
  * graph → automatically gets a URL → automatically gets an image.
  *
- * Cost: $0.0003 per Serper search. 4296 candidates ≈ $1.30 total at full
- * scale. Hard-cap defaults to 1500 items per run ($0.45) so any single run
- * stays comfortably under cost expectations.
+ * Cost: $0.0003 per Serper search. ~1.6k candidates ≈ $0.48 at full scale.
+ * Hard-cap defaults to 1500 items per run ($0.45); raise via max_cost_credits
+ * input if a backlog needs to drain in one go.
  */
 
 import { createWorkflow, createStep } from "@mastra/core/workflows";
@@ -76,8 +82,7 @@ interface Candidate {
 
 const READ_CYPHER = `
 MATCH (g:GearItem)
-WHERE g.product_url IS NULL
-  AND g.image_url IS NULL
+WHERE (g.product_url IS NULL OR g.product_url = '')
   AND g.brand IS NOT NULL
   AND g.name IS NOT NULL
 RETURN ID(g) AS node_id,
