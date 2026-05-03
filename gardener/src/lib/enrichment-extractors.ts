@@ -879,7 +879,10 @@ ${snippets.map((s, i) => `[${i + 1}] ${s}`).join("\n")}`;
       { role: "user", content: userPrompt },
     ],
   };
-  if (!modelId.startsWith("google/")) {
+  // response_format is an OpenAI-specific feature. Anthropic via the gateway
+  // returns 400 invalid_request_error when this field is set; Google/Gemini
+  // simply ignores it. Only enable for OpenAI provider prefix.
+  if (modelId.startsWith("openai/")) {
     body.response_format = { type: "json_object" };
   }
 
