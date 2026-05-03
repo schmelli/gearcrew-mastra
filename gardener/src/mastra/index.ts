@@ -6,9 +6,6 @@ import { brandCategoryScan } from "../workflows/brand-category-scan.js";
 import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
 import { brandDedup } from "../workflows/brand-dedup.js";
 import { typeDedup } from "../workflows/type-dedup.js";
-import { autoTypingFlash } from "../workflows/auto-typing.js";
-import { enrichmentLite } from "../workflows/enrichment-lite.js";
-import { enrichmentPremium } from "../workflows/enrichment-premium.js";
 import { successorDetection } from "../workflows/successor-detection.js";
 import { specNormalization } from "../workflows/spec-normalization.js";
 import { supabaseMemgraphBridge } from "../workflows/supabase-memgraph-bridge.js";
@@ -26,6 +23,15 @@ import { memgraphUrlDiscovery } from "../workflows/memgraph-url-discovery.js";
 import { memgraphWeightDiscovery } from "../workflows/memgraph-weight-discovery.js";
 import { closeDriver } from "../lib/memgraph.js";
 
+// DEREGISTERED 2026-05-03 (Source-of-Truth cleanup):
+//   - autoTypingFlash         (./workflows/auto-typing.ts)
+//   - enrichmentLite          (./workflows/enrichment-lite.ts)
+//   - enrichmentPremium       (./workflows/enrichment-premium.ts)
+// These workflows wrote enrichment results back into Supabase `gear_items`,
+// violating the rule that GearGraph (Memgraph) is the single source of truth
+// for gear data. Files are still on disk for reference until deletion is
+// confirmed; importers and exports above are removed so they cannot run.
+
 const port = parseInt(process.env.PORT || "4111", 10);
 
 export const mastra = new Mastra({
@@ -34,30 +40,27 @@ export const mastra = new Mastra({
     GardenerSonnet: gardenerSonnet,
     YoutubeGearExtractor: youtubeGearExtractor,
   },
-  // brandDedup: manual-trigger only (no scheduler) per CONTEXT D-10 100% human-review-gate.
-  // typeDedup: manual-trigger only (no scheduler) per CONTEXT D-12 — type-merge happens Gearshack-side via migration.
-  // autoTypingFlash: manual-trigger only (no scheduler) per CONTEXT D-14 — production apply-runs require human-gating ($10 cost cap).
-  // enrichmentLite: manual-trigger only (no scheduler) per Phase 09 GEA-1086+1087 scope-reduced launch flow ($5 combined cost cap).
-  //                 Round-robin priority + per-type cooldown enabled by default (quick-260428-jux).
-  // enrichmentPremium: manual-trigger only (registered quick-260428-ke7). $10 cost cap.
-  //                 Description (Gemini Flash, 200-400 words) + insights (Memgraph
-  //                 VideoSource transcripts -> tagged Insight nodes via HAS_INSIGHT/DERIVED_FROM).
-  //                 Scheduler + cron defer to next deployment task.
-  // successorDetection: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
-  // specNormalization: manual-trigger only (registered quick-260428-jux). Scheduler deferred to follow-up.
-  // supabaseMemgraphBridge: manual-trigger only (registered quick-260429). Stamps g.supabase_id on
-  //                 Memgraph GearItem nodes by case-insensitive (brand, name) match. Prerequisite
-  //                 for enrichmentPremium insights extraction.
-  // productDiscovery + brandEnrichment: NOT registered — both still use legacy `new Workflow()` v2 API.
-  //                 v2->v3 retrofit is its own task; defer to post-launch (quick-260428-jux scope decision).
+  // SoT-Rule (2026-05-03 onwards): GearGraph (Memgraph) is the single source
+  // of truth for gear data. Workflows registered here may only:
+  //   - read from Supabase to enrich Memgraph (catalog-image-bridge,
+  //     supabase-memgraph-bridge — both write Memgraph only)
+  //   - read/write Memgraph directly (memgraph-* family)
+  //   - persist run telemetry / admin queues to Supabase
+  //     (gardener_workflow_runs, brand_dedup_queue, family_canonical_queue,
+  //      processed_videos, graph_audit_log)
+  // Workflows that wrote enrichment results back into Supabase gear_items
+  // (enrichmentLite, enrichmentPremium, autoTypingFlash) were deregistered.
+  //
+  // brandDedup / familyCanonical: Admin-Queue producers — write only to a
+  // human-review queue, never apply changes themselves.
+  // typeDedup: read-only catalog dedup proposals (apply happens via migration).
+  // catalogImageBridge / supabaseMemgraphBridge: Supabase → Memgraph spiegel,
+  // niemals umgekehrt; nicht-clobbernd (nur wenn Memgraph-Feld NULL).
   workflows: {
     brandCategoryScan,
     youtubePlaylistIngest,
     brandDedup,
     typeDedup,
-    autoTypingFlash,
-    enrichmentLite,
-    enrichmentPremium,
     successorDetection,
     specNormalization,
     supabaseMemgraphBridge,
