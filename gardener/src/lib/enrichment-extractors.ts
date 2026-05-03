@@ -837,8 +837,12 @@ export async function extractWeightWithLlm(
 
   const baseUrl =
     process.env.AI_GATEWAY_BASE_URL ?? "https://ai-gateway.vercel.sh/v1";
+  // Default Haiku 4.5: ~$1/M input tokens, but 100% reliable JSON output and
+  // respects max_tokens — Gemini Flash via this gateway sometimes emits
+  // markdown-fenced output that gets truncated mid-string at 200 tokens.
+  // Override via WEIGHT_LLM_MODEL_ID if you want to A/B another model.
   const modelId =
-    process.env.WEIGHT_LLM_MODEL_ID ?? "google/gemini-2.5-flash";
+    process.env.WEIGHT_LLM_MODEL_ID ?? "anthropic/claude-haiku-4-5";
 
   const userPrompt = `Extract the product's own weight from these page excerpts. Return ONLY a JSON object: {"weight_grams": <integer 1..50000 or null>, "source_phrase": "<exact phrase containing weight, max 60 chars>"}.
 
@@ -861,12 +865,16 @@ ${snippets.map((s, i) => `[${i + 1}] ${s}`).join("\n")}`;
   const body: ChatRequestBody = {
     model: modelId,
     temperature: 0,
-    max_tokens: 200,
+    // 200 tokens is too tight when the model wraps the response in a markdown
+    // fence or emits verbose reasoning before the JSON — output gets truncated
+    // mid-string and parsing fails. 500 tokens covers any plausible response
+    // including ~60-char source_phrase + small JSON envelope.
+    max_tokens: 500,
     messages: [
       {
         role: "system",
         content:
-          'You extract product weight from web page excerpts. Output JSON only, no markdown fence. Schema: {"weight_grams": number|null, "source_phrase": string}.',
+          'You extract product weight from web page excerpts. Output a single JSON object, no markdown fence, no array. Schema: {"weight_grams": number|null, "source_phrase": string}.',
       },
       { role: "user", content: userPrompt },
     ],
@@ -917,7 +925,12 @@ ${snippets.map((s, i) => `[${i + 1}] ${s}`).join("\n")}`;
     }
 
     if (!parsed || typeof parsed !== "object") return null;
-    const obj = parsed as Record<string, unknown>;
+    // Defensive: some models (Gemini Flash via gateway in particular) wrap a
+    // single result in a one-element array even when the prompt says "object".
+    // Unwrap before validating.
+    const root = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!root || typeof root !== "object") return null;
+    const obj = root as Record<string, unknown>;
     const w = obj.weight_grams;
     const phrase = obj.source_phrase;
     if (typeof w !== "number" || !Number.isFinite(w)) return null;
