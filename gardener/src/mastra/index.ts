@@ -4,6 +4,7 @@ import { gardenerHaiku, gardenerSonnet } from "../agents/gardener-v3.js";
 import { youtubeGearExtractor } from "../agents/youtube-gear-extractor.js";
 import { brandPortfolioAudit } from "../workflows/brand-portfolio-audit.js";
 import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
+import { urlIngest } from "../workflows/url-ingest.js";
 import { brandDedup } from "../workflows/brand-dedup.js";
 import { typeDedup } from "../workflows/type-dedup.js";
 import { successorDetection } from "../workflows/successor-detection.js";
@@ -63,6 +64,7 @@ export const mastra = new Mastra({
   workflows: {
     brandPortfolioAudit,
     youtubePlaylistIngest,
+    urlIngest,
     brandDedup,
     typeDedup,
     successorDetection,
