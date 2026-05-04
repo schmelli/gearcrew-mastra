@@ -125,6 +125,9 @@ export async function detectGapsForItem(
  * MATCH-WHERE chain (Memgraph doesn't accept a runtime flag inside duration()).
  */
 function BUILD_GAP_QUERY(args: { ignoreCooldown: boolean }): string {
+  // Memgraph specific: EXISTS(pattern) and size(pattern) may not appear in
+  // CASE/WITH/RETURN — only in WHERE. We pre-aggregate the relationship
+  // existence flags via chained OPTIONAL MATCH + count() instead.
   const cooldownClause = args.ignoreCooldown
     ? ""
     : `AND (
@@ -136,19 +139,23 @@ function BUILD_GAP_QUERY(args: { ignoreCooldown: boolean }): string {
   return `
 MATCH (g:GearItem)
 OPTIONAL MATCH (g)-[:PRODUCED_BY]->(b:OutdoorBrand)
+OPTIONAL MATCH (g)-[:IS_TYPE]->(pt:ProductType)
+WITH g, b, count(DISTINCT pt) > 0 AS has_type
+OPTIONAL MATCH (g)-[:IS_VARIANT_OF]->(pf:ProductFamily)
+WITH g, b, has_type, count(DISTINCT pf) > 0 AS has_family
+OPTIONAL MATCH (g)-[:HAS_INSIGHT]->(ins:Insight)
+WITH g, b, has_type, has_family, count(DISTINCT ins) > 0 AS has_insight
+OPTIONAL MATCH (g)-[:EXTRACTED_FROM]->(vs:VideoSource)
+WITH g, b, has_type, has_family, has_insight, count(DISTINCT vs) > 0 AS has_video
 WITH g, b,
   [
     CASE WHEN g.product_url IS NULL OR g.product_url = '' THEN 'product_url' END,
     CASE WHEN g.image_url IS NULL OR g.image_url = '' THEN 'image_url' END,
     CASE WHEN g.weight_grams IS NULL OR g.weight_grams = 0 THEN 'weight_grams' END,
-    CASE WHEN NOT EXISTS((g)-[:IS_TYPE]->(:ProductType)) THEN 'product_type' END,
-    CASE WHEN NOT EXISTS((g)-[:IS_VARIANT_OF]->(:ProductFamily)) THEN 'product_family' END,
+    CASE WHEN NOT has_type THEN 'product_type' END,
+    CASE WHEN NOT has_family THEN 'product_family' END,
     CASE WHEN g.description IS NULL OR size(coalesce(g.description, '')) < 200 THEN 'description' END,
-    CASE
-      WHEN NOT EXISTS((g)-[:HAS_INSIGHT]->(:Insight))
-       AND EXISTS((g)-[:EXTRACTED_FROM]->(:VideoSource))
-      THEN 'insights'
-    END,
+    CASE WHEN NOT has_insight AND has_video THEN 'insights' END,
     CASE
       WHEN g.last_verified_at IS NULL OR g.last_verified_at < datetime() - duration('P90D')
       THEN 'stale_verification'
@@ -199,19 +206,23 @@ LIMIT toInteger($limit)
 const SINGLE_ITEM_GAP_QUERY = `
 MATCH (g:GearItem) WHERE ID(g) = toInteger($nodeId)
 OPTIONAL MATCH (g)-[:PRODUCED_BY]->(b:OutdoorBrand)
+OPTIONAL MATCH (g)-[:IS_TYPE]->(pt:ProductType)
+WITH g, b, count(DISTINCT pt) > 0 AS has_type
+OPTIONAL MATCH (g)-[:IS_VARIANT_OF]->(pf:ProductFamily)
+WITH g, b, has_type, count(DISTINCT pf) > 0 AS has_family
+OPTIONAL MATCH (g)-[:HAS_INSIGHT]->(ins:Insight)
+WITH g, b, has_type, has_family, count(DISTINCT ins) > 0 AS has_insight
+OPTIONAL MATCH (g)-[:EXTRACTED_FROM]->(vs:VideoSource)
+WITH g, b, has_type, has_family, has_insight, count(DISTINCT vs) > 0 AS has_video
 WITH g, b,
   [
     CASE WHEN g.product_url IS NULL OR g.product_url = '' THEN 'product_url' END,
     CASE WHEN g.image_url IS NULL OR g.image_url = '' THEN 'image_url' END,
     CASE WHEN g.weight_grams IS NULL OR g.weight_grams = 0 THEN 'weight_grams' END,
-    CASE WHEN NOT EXISTS((g)-[:IS_TYPE]->(:ProductType)) THEN 'product_type' END,
-    CASE WHEN NOT EXISTS((g)-[:IS_VARIANT_OF]->(:ProductFamily)) THEN 'product_family' END,
+    CASE WHEN NOT has_type THEN 'product_type' END,
+    CASE WHEN NOT has_family THEN 'product_family' END,
     CASE WHEN g.description IS NULL OR size(coalesce(g.description, '')) < 200 THEN 'description' END,
-    CASE
-      WHEN NOT EXISTS((g)-[:HAS_INSIGHT]->(:Insight))
-       AND EXISTS((g)-[:EXTRACTED_FROM]->(:VideoSource))
-      THEN 'insights'
-    END,
+    CASE WHEN NOT has_insight AND has_video THEN 'insights' END,
     CASE
       WHEN g.last_verified_at IS NULL OR g.last_verified_at < datetime() - duration('P90D')
       THEN 'stale_verification'
