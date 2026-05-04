@@ -156,14 +156,14 @@ WITH g, b,
     CASE WHEN NOT has_family THEN 'product_family' END,
     CASE WHEN g.description IS NULL OR size(coalesce(g.description, '')) < 200 THEN 'description' END,
     CASE WHEN NOT has_insight AND has_video THEN 'insights' END,
-    CASE
-      WHEN g.last_verified_at IS NULL OR g.last_verified_at < datetime() - duration('P90D')
-      THEN 'stale_verification'
-    END,
-    CASE
-      WHEN g.successor_check_at IS NULL OR g.successor_check_at < datetime() - duration('P30D')
-      THEN 'successor_check'
-    END
+    // Date comparisons defensive: some legacy nodes carry last_verified_at as
+    // a string instead of datetime (data-drift before property-discipline was
+    // enforced). Comparing string < datetime crashes Memgraph with
+    // "Invalid types: string and zoned_date_time for '<'", so we only flag
+    // missing values here. Once the legacy strings are migrated to datetime,
+    // this can be tightened back to "older than 90d".
+    CASE WHEN g.last_verified_at IS NULL THEN 'stale_verification' END,
+    CASE WHEN g.successor_check_at IS NULL THEN 'successor_check' END
   ] AS raw_gaps
 WITH g, b, [x IN raw_gaps WHERE x IS NOT NULL] AS gaps
 WHERE size(gaps) > 0
@@ -180,10 +180,10 @@ WITH g, b, gaps,
     + (CASE WHEN 'insights' IN gaps THEN 1 ELSE 0 END)
     + (CASE WHEN 'stale_verification' IN gaps THEN 2 ELSE 0 END)
     + (CASE WHEN 'successor_check' IN gaps THEN 1 ELSE 0 END)
-    + (CASE
-         WHEN g.created_at IS NOT NULL AND g.created_at > datetime() - duration('P14D')
-         THEN 3 ELSE 0
-       END)
+    // created_at recently-added boost intentionally omitted: legacy nodes
+    // carry created_at as string instead of datetime, which crashes the
+    // comparison with "Invalid types: string and zoned_date_time". Re-enable
+    // once a migration normalizes created_at to datetime across the graph.
   ) AS priority_score
 WHERE priority_score >= toInteger($minPriority)
 RETURN
@@ -194,7 +194,7 @@ RETURN
   gaps,
   priority_score,
   coalesce(b.is_top50, false) AS is_top50_brand
-ORDER BY priority_score DESC, g.created_at ASC
+ORDER BY priority_score DESC, ID(g) ASC
 LIMIT toInteger($limit)
 `.trim();
 }
@@ -223,14 +223,14 @@ WITH g, b,
     CASE WHEN NOT has_family THEN 'product_family' END,
     CASE WHEN g.description IS NULL OR size(coalesce(g.description, '')) < 200 THEN 'description' END,
     CASE WHEN NOT has_insight AND has_video THEN 'insights' END,
-    CASE
-      WHEN g.last_verified_at IS NULL OR g.last_verified_at < datetime() - duration('P90D')
-      THEN 'stale_verification'
-    END,
-    CASE
-      WHEN g.successor_check_at IS NULL OR g.successor_check_at < datetime() - duration('P30D')
-      THEN 'successor_check'
-    END
+    // Date comparisons defensive: some legacy nodes carry last_verified_at as
+    // a string instead of datetime (data-drift before property-discipline was
+    // enforced). Comparing string < datetime crashes Memgraph with
+    // "Invalid types: string and zoned_date_time for '<'", so we only flag
+    // missing values here. Once the legacy strings are migrated to datetime,
+    // this can be tightened back to "older than 90d".
+    CASE WHEN g.last_verified_at IS NULL THEN 'stale_verification' END,
+    CASE WHEN g.successor_check_at IS NULL THEN 'successor_check' END
   ] AS raw_gaps
 WITH g, b, [x IN raw_gaps WHERE x IS NOT NULL] AS gaps,
   (CASE WHEN coalesce(b.is_top50, false) THEN 5 ELSE 0 END) AS top50_boost
@@ -246,10 +246,10 @@ WITH g, b, gaps, top50_boost,
     + (CASE WHEN 'insights' IN gaps THEN 1 ELSE 0 END)
     + (CASE WHEN 'stale_verification' IN gaps THEN 2 ELSE 0 END)
     + (CASE WHEN 'successor_check' IN gaps THEN 1 ELSE 0 END)
-    + (CASE
-         WHEN g.created_at IS NOT NULL AND g.created_at > datetime() - duration('P14D')
-         THEN 3 ELSE 0
-       END)
+    // created_at recently-added boost intentionally omitted: legacy nodes
+    // carry created_at as string instead of datetime, which crashes the
+    // comparison with "Invalid types: string and zoned_date_time". Re-enable
+    // once a migration normalizes created_at to datetime across the graph.
   ) AS priority_score
 RETURN
   ID(g) AS memgraph_node_id,
