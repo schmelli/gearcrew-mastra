@@ -21,6 +21,7 @@ import { catalogImageBridge } from "../workflows/catalog-image-bridge.js";
 import { memgraphImageScrape } from "../workflows/memgraph-image-scrape.js";
 import { memgraphUrlDiscovery } from "../workflows/memgraph-url-discovery.js";
 import { memgraphWeightDiscovery } from "../workflows/memgraph-weight-discovery.js";
+import { brandPriorityBootstrap } from "../workflows/brand-priority-bootstrap.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 // DEREGISTERED 2026-05-03 (Source-of-Truth cleanup):
@@ -76,6 +77,7 @@ export const mastra = new Mastra({
     memgraphImageScrape,
     memgraphUrlDiscovery,
     memgraphWeightDiscovery,
+    brandPriorityBootstrap,
   },
   server: {
     port,
