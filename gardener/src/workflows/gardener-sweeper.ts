@@ -65,13 +65,32 @@ const sweepStep = createStep({
     const startedAt = Date.now();
 
     // --- Step 1: gap inventory from Memgraph ---
-    const candidates = await detectGapsForItems({
+    const rawCandidates = await detectGapsForItems({
       limit: inputData.limit,
       ignoreCooldown: inputData.ignoreCooldown,
     });
 
+    // Memgraph data drift: a small number of :GearItems have duplicate
+    // :PRODUCED_BY edges (brand-dedup target items, ~16 in production). The
+    // gap-detector OPTIONAL MATCH on (g)-[:PRODUCED_BY]->(b) yields one row
+    // per such edge, which would crash the Supabase ON CONFLICT upsert
+    // ("ON CONFLICT DO UPDATE command cannot affect row a second time").
+    // Deduplicate here, keeping the first occurrence (highest priority by
+    // ORDER BY priority_score DESC).
+    const seenIds = new Set<string>();
+    const candidates: typeof rawCandidates = [];
+    let dropped = 0;
+    for (const c of rawCandidates) {
+      if (seenIds.has(c.memgraph_node_id)) {
+        dropped += 1;
+        continue;
+      }
+      seenIds.add(c.memgraph_node_id);
+      candidates.push(c);
+    }
+
     console.log(
-      `[Sweeper] swept ${candidates.length} candidates (limit=${inputData.limit} cooldown=${inputData.ignoreCooldown ? "ignored" : "honored"})`,
+      `[Sweeper] swept ${rawCandidates.length} rows → ${candidates.length} distinct candidates (dropped ${dropped} duplicate brand-edge rows; limit=${inputData.limit} cooldown=${inputData.ignoreCooldown ? "ignored" : "honored"})`,
     );
 
     if (inputData.dryRun) {
