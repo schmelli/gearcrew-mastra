@@ -2,7 +2,7 @@ import { Mastra } from "@mastra/core/mastra";
 import cron, { type ScheduledTask } from "node-cron";
 import { gardenerHaiku, gardenerSonnet } from "../agents/gardener-v3.js";
 import { youtubeGearExtractor } from "../agents/youtube-gear-extractor.js";
-import { brandCategoryScan } from "../workflows/brand-category-scan.js";
+import { brandPortfolioAudit } from "../workflows/brand-portfolio-audit.js";
 import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
 import { brandDedup } from "../workflows/brand-dedup.js";
 import { typeDedup } from "../workflows/type-dedup.js";
@@ -60,7 +60,7 @@ export const mastra = new Mastra({
   // catalogImageBridge / supabaseMemgraphBridge: Supabase → Memgraph spiegel,
   // niemals umgekehrt; nicht-clobbernd (nur wenn Memgraph-Feld NULL).
   workflows: {
-    brandCategoryScan,
+    brandPortfolioAudit,
     youtubePlaylistIngest,
     brandDedup,
     typeDedup,
@@ -112,7 +112,7 @@ async function runScanCycle(): Promise<void> {
     return;
   }
 
-  const workflow = mastra.getWorkflow("brandCategoryScan");
+  const workflow = mastra.getWorkflow("brandPortfolioAudit");
 
   for (let attempt = 1; attempt <= MAX_SKIP_RETRIES; attempt++) {
     const runStart = Date.now();

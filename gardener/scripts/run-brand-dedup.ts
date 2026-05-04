@@ -331,8 +331,9 @@ main()
     } catch (err) {
       console.error("[brand-dedup] Failed to close Memgraph driver:", err);
     }
-    // Force-exit because mastra/index.ts starts cron schedulers (brandCategoryScan
-    // + youtubePlaylistIngest) at module-import time that keep the event loop
-    // alive. CLI runs are one-shot — they should not hang on the schedulers.
+    // Force-exit because mastra/index.ts starts cron schedulers
+    // (brandPortfolioAudit + youtubePlaylistIngest) at module-import time
+    // that keep the event loop alive. CLI runs are one-shot — they should
+    // not hang on the schedulers.
     process.exit(process.exitCode ?? 0);
   });

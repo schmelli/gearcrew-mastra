@@ -1,6 +1,11 @@
 /**
- * Brand-Category Scan Workflow
- * Phase 2: Autonomous brand-by-brand, category-by-category graph maintenance.
+ * Brand Portfolio Audit Workflow
+ *   (renamed from brandCategoryScan, 2026-05-04 — same behavior, clearer name)
+ *
+ * Phase 2 of the Gardener architecture: autonomous brand-by-brand,
+ * category-by-category graph maintenance. The agent audits each brand's
+ * product portfolio in one category per tick and updates the Memgraph
+ * graph accordingly.
  *
  * Each tick processes ONE brand+category combination:
  *   1. Pick next target (least-recently-audited brand/category)
@@ -957,8 +962,8 @@ const writeReport = createStep({
 // Workflow export
 // ---------------------------------------------------------------------------
 
-export const brandCategoryScan = createWorkflow({
-  id: "brandCategoryScan",
+export const brandPortfolioAudit = createWorkflow({
+  id: "brandPortfolioAudit",
   inputSchema: triggerSchema,
   outputSchema: reportOutputSchema,
 })
