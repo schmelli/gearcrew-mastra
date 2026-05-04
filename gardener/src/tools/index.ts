@@ -15,3 +15,8 @@ export { enrichGearItemWeight } from "./enrich-gear-item-weight.js";
 export { enrichGearItemImage } from "./enrich-gear-item-image.js";
 export { discoverProductUrl } from "./discover-product-url.js";
 export { classifyProductType } from "./classify-product-type.js";
+
+// P2 — description / family / insights generators
+export { generateGearDescription } from "./generate-gear-description.js";
+export { linkOrCreateFamily } from "./link-or-create-family.js";
+export { extractInsightsFromTranscripts } from "./extract-insights-from-transcripts.js";

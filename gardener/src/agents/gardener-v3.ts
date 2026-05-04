@@ -6,6 +6,17 @@ import {
   webSearch,
   validateSchema,
   getOntology,
+  // 3-layer Gardener architecture (added 2026-05-04)
+  getEnrichmentGaps,
+  getRecentEnrichments,
+  enrichGearItem,
+  enrichGearItemWeight,
+  enrichGearItemImage,
+  discoverProductUrl,
+  classifyProductType,
+  generateGearDescription,
+  linkOrCreateFamily,
+  extractInsightsFromTranscripts,
 } from "../tools/index.js";
 
 // ---------------------------------------------------------------------------
@@ -159,6 +170,18 @@ ${CYPHER_RULES}
     webSearch,
     validateSchema,
     getOntology,
+    // 3-layer Gardener architecture: gap-aware self-awareness + atomic
+    // write tool with confidence-routing + research wrappers
+    getEnrichmentGaps,
+    getRecentEnrichments,
+    enrichGearItem,
+    enrichGearItemWeight,
+    enrichGearItemImage,
+    discoverProductUrl,
+    classifyProductType,
+    generateGearDescription,
+    linkOrCreateFamily,
+    extractInsightsFromTranscripts,
   },
 });
 

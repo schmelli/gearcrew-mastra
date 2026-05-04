@@ -23,6 +23,7 @@ import { memgraphUrlDiscovery } from "../workflows/memgraph-url-discovery.js";
 import { memgraphWeightDiscovery } from "../workflows/memgraph-weight-discovery.js";
 import { brandPriorityBootstrap } from "../workflows/brand-priority-bootstrap.js";
 import { gardenerSweeper } from "../workflows/gardener-sweeper.js";
+import { gardenerEnrichmentCycle } from "../workflows/gardener-enrichment-cycle.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 // DEREGISTERED 2026-05-03 (Source-of-Truth cleanup):
@@ -80,6 +81,7 @@ export const mastra = new Mastra({
     memgraphWeightDiscovery,
     brandPriorityBootstrap,
     gardenerSweeper,
+    gardenerEnrichmentCycle,
   },
   server: {
     port,
@@ -423,6 +425,69 @@ function startSweeperScheduler(): void {
 setTimeout(() => startSweeperScheduler(), 11000);
 
 // ---------------------------------------------------------------------------
+// Gardener-Enrichment-Cycle Scheduler (Phase 2 of 3-layer architecture)
+//
+// Hourly cycle that claims top-N items from gardener_work_queue and dispatches
+// each to the GardenerHaiku agent for autonomous gap-filling. Schedule is
+// offset by 30 minutes from the Sweeper so each cycle works on a freshly
+// updated queue.
+//
+// Defaults: maxItems=8, maxCostUsd=2 → 24 cycles/day × $2 cap = max $48/day.
+// Toggle via CYCLE_AUTONOMOUS=false. Override schedule via CYCLE_SCHEDULE.
+// ---------------------------------------------------------------------------
+
+let cycleTask: ScheduledTask | null = null;
+let cycleRunning = false;
+
+async function runEnrichmentCycle(): Promise<void> {
+  const workflow = mastra.getWorkflow("gardenerEnrichmentCycle");
+  const start = Date.now();
+  const run = await workflow.createRunAsync();
+  const result = await run.start({
+    inputData: {
+      maxItems: parseInt(process.env.CYCLE_MAX_ITEMS ?? "8", 10),
+      maxCostUsd: parseFloat(process.env.CYCLE_MAX_COST_USD ?? "2"),
+    },
+  });
+  const seconds = Math.round((Date.now() - start) / 1000);
+  const stepResult =
+    (result as { result?: Record<string, unknown> }).result ?? {};
+  console.log(
+    `[Gardener-Cycle] cycle done in ${seconds}s — claimed=${stepResult.items_claimed ?? "?"} done=${stepResult.items_done ?? "?"} failed=${stepResult.items_failed ?? "?"} cost_cents=${stepResult.total_cost_cents ?? "?"} aborted_cap=${stepResult.aborted_cost_cap ?? "?"}`,
+  );
+}
+
+function startCycleScheduler(): void {
+  const schedule = process.env.CYCLE_SCHEDULE || "30 * * * *"; // every hour at :30
+  const enabled = process.env.CYCLE_AUTONOMOUS !== "false";
+  if (!enabled) {
+    console.log("[Gardener-Cycle] Disabled (CYCLE_AUTONOMOUS=false)");
+    return;
+  }
+  cycleTask = cron.schedule(
+    schedule,
+    async () => {
+      if (cycleRunning) {
+        console.log("[Gardener-Cycle] Previous cycle still running, skipping");
+        return;
+      }
+      cycleRunning = true;
+      try {
+        await runEnrichmentCycle();
+      } catch (err) {
+        console.error("[Gardener-Cycle] Cycle failed:", err);
+      } finally {
+        cycleRunning = false;
+      }
+    },
+    { timezone: "UTC" },
+  );
+  console.log(`[Gardener-Cycle] Scheduler started: "${schedule}" (UTC)`);
+}
+
+setTimeout(() => startCycleScheduler(), 13000);
+
+// ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
@@ -447,6 +512,10 @@ async function gracefulShutdown(signal: string) {
   if (sweeperTask) {
     sweeperTask.stop();
     console.log("[Gardener-Sweeper] Scheduler stopped");
+  }
+  if (cycleTask) {
+    cycleTask.stop();
+    console.log("[Gardener-Cycle] Scheduler stopped");
   }
   await closeDriver();
   process.exit(0);
