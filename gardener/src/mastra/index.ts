@@ -13,14 +13,15 @@ import { backfillBridgeTranscripts } from "../workflows/backfill-bridge-transcri
 import { backfillAllTranscripts } from "../workflows/backfill-all-transcripts.js";
 import { tipClassification } from "../workflows/tip-classification.js";
 import { insightMigration } from "../workflows/insight-migration.js";
-import { memgraphProductTypeBackfill } from "../workflows/memgraph-product-type-backfill.js";
-import { memgraphInsightsExtraction } from "../workflows/memgraph-insights-extraction.js";
 import { rerouteFallbackTips } from "../workflows/reroute-fallback-tips.js";
 import { familyCanonical } from "../workflows/family-canonical-names.js";
 import { catalogImageBridge } from "../workflows/catalog-image-bridge.js";
+// memgraphImageScrape + memgraphUrlDiscovery: kept registered so the
+// scripts/run-memgraph-{image-scrape,url-discovery}.ts CLI runners still
+// work — but the cron schedulers below are gone (Klebefalle work is now
+// done by gardenerSweeper + gardenerEnrichmentCycle).
 import { memgraphImageScrape } from "../workflows/memgraph-image-scrape.js";
 import { memgraphUrlDiscovery } from "../workflows/memgraph-url-discovery.js";
-import { memgraphWeightDiscovery } from "../workflows/memgraph-weight-discovery.js";
 import { brandPriorityBootstrap } from "../workflows/brand-priority-bootstrap.js";
 import { gardenerSweeper } from "../workflows/gardener-sweeper.js";
 import { gardenerEnrichmentCycle } from "../workflows/gardener-enrichment-cycle.js";
@@ -71,14 +72,11 @@ export const mastra = new Mastra({
     backfillAllTranscripts,
     tipClassification,
     insightMigration,
-    memgraphProductTypeBackfill,
-    memgraphInsightsExtraction,
     rerouteFallbackTips,
     familyCanonical,
     catalogImageBridge,
     memgraphImageScrape,
     memgraphUrlDiscovery,
-    memgraphWeightDiscovery,
     brandPriorityBootstrap,
     gardenerSweeper,
     gardenerEnrichmentCycle,
@@ -263,109 +261,16 @@ function startYoutubeScheduler(): void {
 setTimeout(() => startYoutubeScheduler(), 7000);
 
 // ---------------------------------------------------------------------------
-// Klebefalle-Aufwertung Scheduler
-// Two coordinated cron jobs that turn the graph into a self-healing system:
-//   1. URL-Discovery (every 6h at :00) — find product_url for naked items via
-//      Serper. Hard-cap default 1500 credits ($0.45/run, $1.80/day).
-//   2. Image-Scrape (every 6h at :30) — scrape og:image for any item with
-//      product_url & no image_url. Free (just HTTP fetch).
-// Disable individually via KLEBEFALLE_URL_AUTONOMOUS / KLEBEFALLE_IMAGE_AUTONOMOUS.
+// Klebefalle-Aufwertung Schedulers (memgraphUrlDiscovery + memgraphImageScrape)
+// were removed 2026-05-04 (Phase 4.2). Their work is now subsumed by
+// gardenerSweeper (which queues GearItems with missing product_url /
+// image_url) plus gardenerEnrichmentCycle (which fills those gaps via the
+// Gardener-Haiku agent — itself uses the same Serper + og:image tools).
+//
+// The workflows themselves stay registered above so the manual CLI runners
+// scripts/run-memgraph-{url-discovery,image-scrape}.ts continue to work
+// for one-off backfills or debugging.
 // ---------------------------------------------------------------------------
-
-let urlDiscoveryTask: ScheduledTask | null = null;
-let urlDiscoveryRunning = false;
-let imageScrapeTask: ScheduledTask | null = null;
-let imageScrapeRunning = false;
-
-async function runUrlDiscoveryCycle(): Promise<void> {
-  const workflow = mastra.getWorkflow("memgraphUrlDiscovery");
-  const start = Date.now();
-  const run = await workflow.createRunAsync();
-  const result = await run.start({
-    inputData: { mode: "apply" as const },
-  });
-  const seconds = Math.round((Date.now() - start) / 1000);
-  const stepResult =
-    (result as { result?: Record<string, unknown> }).result ?? {};
-  console.log(
-    `[Klebefalle-URL-Cron] cycle done in ${seconds}s — searched=${stepResult.searched ?? "?"} discovered=${stepResult.discovered ?? "?"} written=${stepResult.written ?? "?"} credits=${stepResult.cost_credits_used ?? "?"} aborted=${stepResult.aborted_due_to_cost ?? "?"}`,
-  );
-}
-
-async function runImageScrapeCycle(): Promise<void> {
-  const workflow = mastra.getWorkflow("memgraphImageScrape");
-  const start = Date.now();
-  const run = await workflow.createRunAsync();
-  const result = await run.start({
-    inputData: { mode: "apply" as const },
-  });
-  const seconds = Math.round((Date.now() - start) / 1000);
-  const stepResult =
-    (result as { result?: Record<string, unknown> }).result ?? {};
-  console.log(
-    `[Klebefalle-Image-Cron] cycle done in ${seconds}s — candidates=${stepResult.total_candidates ?? "?"} success=${stepResult.scraped_success ?? "?"} written=${stepResult.written ?? "?"}`,
-  );
-}
-
-function startKlebefalleSchedulers(): void {
-  const urlSchedule = process.env.KLEBEFALLE_URL_SCHEDULE || "0 */6 * * *"; // every 6h on :00
-  const urlEnabled = process.env.KLEBEFALLE_URL_AUTONOMOUS !== "false";
-  const imageSchedule =
-    process.env.KLEBEFALLE_IMAGE_SCHEDULE || "30 */6 * * *"; // every 6h on :30
-  const imageEnabled = process.env.KLEBEFALLE_IMAGE_AUTONOMOUS !== "false";
-
-  if (urlEnabled) {
-    urlDiscoveryTask = cron.schedule(
-      urlSchedule,
-      async () => {
-        if (urlDiscoveryRunning) {
-          console.log("[Klebefalle-URL-Cron] Previous cycle still running, skipping");
-          return;
-        }
-        urlDiscoveryRunning = true;
-        try {
-          await runUrlDiscoveryCycle();
-        } catch (err) {
-          console.error("[Klebefalle-URL-Cron] Cycle failed:", err);
-        } finally {
-          urlDiscoveryRunning = false;
-        }
-      },
-      { timezone: "UTC" },
-    );
-    console.log(`[Klebefalle-URL-Cron] Scheduler started: "${urlSchedule}" (UTC)`);
-  } else {
-    console.log("[Klebefalle-URL-Cron] Disabled (KLEBEFALLE_URL_AUTONOMOUS=false)");
-  }
-
-  if (imageEnabled) {
-    imageScrapeTask = cron.schedule(
-      imageSchedule,
-      async () => {
-        if (imageScrapeRunning) {
-          console.log("[Klebefalle-Image-Cron] Previous cycle still running, skipping");
-          return;
-        }
-        imageScrapeRunning = true;
-        try {
-          await runImageScrapeCycle();
-        } catch (err) {
-          console.error("[Klebefalle-Image-Cron] Cycle failed:", err);
-        } finally {
-          imageScrapeRunning = false;
-        }
-      },
-      { timezone: "UTC" },
-    );
-    console.log(
-      `[Klebefalle-Image-Cron] Scheduler started: "${imageSchedule}" (UTC)`,
-    );
-  } else {
-    console.log("[Klebefalle-Image-Cron] Disabled (KLEBEFALLE_IMAGE_AUTONOMOUS=false)");
-  }
-}
-
-setTimeout(() => startKlebefalleSchedulers(), 9000);
 
 // ---------------------------------------------------------------------------
 // Gardener-Sweeper Scheduler (Phase 1 of 3-layer Gardener architecture)
@@ -500,14 +405,6 @@ async function gracefulShutdown(signal: string) {
   if (youtubeTask) {
     youtubeTask.stop();
     console.log("[YouTube-Cron] Scheduler stopped");
-  }
-  if (urlDiscoveryTask) {
-    urlDiscoveryTask.stop();
-    console.log("[Klebefalle-URL-Cron] Scheduler stopped");
-  }
-  if (imageScrapeTask) {
-    imageScrapeTask.stop();
-    console.log("[Klebefalle-Image-Cron] Scheduler stopped");
   }
   if (sweeperTask) {
     sweeperTask.stop();
