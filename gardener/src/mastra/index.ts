@@ -22,6 +22,7 @@ import { memgraphImageScrape } from "../workflows/memgraph-image-scrape.js";
 import { memgraphUrlDiscovery } from "../workflows/memgraph-url-discovery.js";
 import { memgraphWeightDiscovery } from "../workflows/memgraph-weight-discovery.js";
 import { brandPriorityBootstrap } from "../workflows/brand-priority-bootstrap.js";
+import { gardenerSweeper } from "../workflows/gardener-sweeper.js";
 import { closeDriver } from "../lib/memgraph.js";
 
 // DEREGISTERED 2026-05-03 (Source-of-Truth cleanup):
@@ -78,6 +79,7 @@ export const mastra = new Mastra({
     memgraphUrlDiscovery,
     memgraphWeightDiscovery,
     brandPriorityBootstrap,
+    gardenerSweeper,
   },
   server: {
     port,
@@ -364,6 +366,63 @@ function startKlebefalleSchedulers(): void {
 setTimeout(() => startKlebefalleSchedulers(), 9000);
 
 // ---------------------------------------------------------------------------
+// Gardener-Sweeper Scheduler (Phase 1 of 3-layer Gardener architecture)
+//
+// Hourly run that identifies :GearItem nodes with enrichment gaps and writes
+// them into Supabase gardener_work_queue. The Phase-2 enrichment-cycle (next
+// commit) reads top-N from that queue and dispatches to the Gardener-Haiku
+// agent for autonomous gap-filling.
+//
+// Toggle via SWEEPER_AUTONOMOUS=false. Override schedule via SWEEPER_SCHEDULE.
+// ---------------------------------------------------------------------------
+
+let sweeperTask: ScheduledTask | null = null;
+let sweeperRunning = false;
+
+async function runSweeperCycle(): Promise<void> {
+  const workflow = mastra.getWorkflow("gardenerSweeper");
+  const start = Date.now();
+  const run = await workflow.createRunAsync();
+  const result = await run.start({ inputData: {} });
+  const seconds = Math.round((Date.now() - start) / 1000);
+  const stepResult =
+    (result as { result?: Record<string, unknown> }).result ?? {};
+  console.log(
+    `[Gardener-Sweeper] cycle done in ${seconds}s — candidates=${stepResult.candidates_found ?? "?"} inserted=${stepResult.queue_inserted ?? "?"} refreshed=${stepResult.queue_refreshed ?? "?"} resolved=${stepResult.queue_resolved ?? "?"}`,
+  );
+}
+
+function startSweeperScheduler(): void {
+  const schedule = process.env.SWEEPER_SCHEDULE || "0 * * * *"; // every hour at :00
+  const enabled = process.env.SWEEPER_AUTONOMOUS !== "false";
+  if (!enabled) {
+    console.log("[Gardener-Sweeper] Disabled (SWEEPER_AUTONOMOUS=false)");
+    return;
+  }
+  sweeperTask = cron.schedule(
+    schedule,
+    async () => {
+      if (sweeperRunning) {
+        console.log("[Gardener-Sweeper] Previous cycle still running, skipping");
+        return;
+      }
+      sweeperRunning = true;
+      try {
+        await runSweeperCycle();
+      } catch (err) {
+        console.error("[Gardener-Sweeper] Cycle failed:", err);
+      } finally {
+        sweeperRunning = false;
+      }
+    },
+    { timezone: "UTC" },
+  );
+  console.log(`[Gardener-Sweeper] Scheduler started: "${schedule}" (UTC)`);
+}
+
+setTimeout(() => startSweeperScheduler(), 11000);
+
+// ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
@@ -384,6 +443,10 @@ async function gracefulShutdown(signal: string) {
   if (imageScrapeTask) {
     imageScrapeTask.stop();
     console.log("[Klebefalle-Image-Cron] Scheduler stopped");
+  }
+  if (sweeperTask) {
+    sweeperTask.stop();
+    console.log("[Gardener-Sweeper] Scheduler stopped");
   }
   await closeDriver();
   process.exit(0);
