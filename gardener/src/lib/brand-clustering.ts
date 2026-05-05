@@ -213,6 +213,47 @@ function extractBalancedJsonObject(raw: string): string | null {
   return null;
 }
 
+/**
+ * Best-effort repair of truncated JSON by closing unbalanced brackets/braces.
+ * Handles the Gemini-via-gateway case where max_tokens cuts off the response
+ * mid-array. Drops trailing partial entries until balance is restored.
+ */
+function repairTruncatedJson(raw: string): string | null {
+  let depth = 0;
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  let lastSafePoint = -1;
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{" || ch === "[") {
+      stack.push(ch === "{" ? "}" : "]");
+      depth = stack.length;
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      depth = stack.length;
+      if (depth === 0) return raw.slice(0, i + 1);
+    } else if (ch === "," && depth <= 2) {
+      // Comma at depth 1 or 2 = end of a top-level entry; safe truncation point.
+      lastSafePoint = i;
+    }
+  }
+
+  if (lastSafePoint === -1) return null;
+  // Truncate at last safe comma + close all remaining open brackets/braces.
+  const head = raw.slice(0, lastSafePoint);
+  const closers = stack.reverse().join("");
+  return head + closers;
+}
+
 function parseJsonResponse(content: string): unknown {
   // Try direct JSON.parse first (works when response_format=json_object).
   try {
@@ -224,13 +265,31 @@ function parseJsonResponse(content: string): unknown {
       try {
         return JSON.parse(fenced);
       } catch {
-        // Fall through to balanced-object extraction.
+        // Fall through to balanced + repair extraction.
       }
     }
     // Balanced { ... } extraction (handles trailing prose or truncated fences).
     const balanced = extractBalancedJsonObject(content);
     if (balanced) {
-      return JSON.parse(balanced);
+      try {
+        return JSON.parse(balanced);
+      } catch {
+        // Fall through to truncation-repair.
+      }
+    }
+    // Last resort: repair truncated JSON by closing unbalanced brackets.
+    const candidate = fenced ?? content;
+    const repaired = repairTruncatedJson(candidate);
+    if (repaired) {
+      try {
+        const parsed = JSON.parse(repaired) as unknown;
+        console.warn(
+          `[brand-clustering] LLM response was truncated; recovered ${repaired.length}/${candidate.length} chars via best-effort repair.`,
+        );
+        return parsed;
+      } catch {
+        // Fall through to throw.
+      }
     }
     throw new Error(
       `[brand-clustering] LLM response was not valid JSON: ${content.slice(0, 500)}...`,

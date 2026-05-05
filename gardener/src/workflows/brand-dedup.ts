@@ -272,11 +272,33 @@ async function markClusterApplied(
     })
     .eq("cluster_id", clusterId);
 
-  if (error) {
+  if (!error) return;
+
+  // FK on applied_workflow_run_id → gardener_workflow_runs(id) may fail when
+  // recordWorkflowRun's insert was blocked by its own FK on auth.users(id).
+  // The Memgraph merge already succeeded — we don't want to lose that work over
+  // a missing audit-trail row. Retry without the FK reference.
+  if (error.code === "23503" || /foreign key constraint/i.test(error.message)) {
+    console.warn(
+      `[brand-dedup] applied_workflow_run_id FK missing (recordWorkflowRun likely failed); marking applied without run-id reference`,
+    );
+    const { error: retryError } = await supa
+      .from("brand_dedup_queue")
+      .update({
+        status: "applied",
+        applied_workflow_run_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("cluster_id", clusterId);
+    if (!retryError) return;
     throw new Error(
-      `[brand-dedup] failed to mark cluster=${clusterId} as applied: ${error.message}`,
+      `[brand-dedup] failed to mark cluster=${clusterId} as applied (retry without FK also failed): ${retryError.message}`,
     );
   }
+
+  throw new Error(
+    `[brand-dedup] failed to mark cluster=${clusterId} as applied: ${error.message}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
