@@ -599,7 +599,9 @@ Touring Skis, Splitboards, Ski Accessories, Camp Chairs, Camp Tables, Repair Kit
 Care Products, Knives, Multi-Tools, Axes & Hatchets, Cord & Fasteners, Dog Gear,
 Travel Accessories, Trekking Poles, Ice Axes, Crampons, Snowshoes, Batteries,
 Drink Mixes, Freeze-Dried Meals, Trail Snacks, Camp Cooking Ingredients,
-Canister Gas, Liquid Fuel, Solid Fuel
+Canister Gas, Liquid Fuel, Solid Fuel,
+Frame Bag, Seat Pack, Handlebar Roll, Top Tube Bag,
+Packraft, Packraft Paddle, Dry Bag, Spray Deck
 
 WICHTIG — Wenn du fertig bist, schreibe am Ende einen Report:
 
