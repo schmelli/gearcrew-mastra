@@ -69,10 +69,13 @@ export async function applyBrandClusterMerge(
         console.warn(`[brand-dedup-apply] skipping empty alias for canonical=${canonical}`);
         continue;
       }
-      if (aliasName.toLowerCase() === canonical.toLowerCase()) {
-        // Self-merge — alias IS the canonical, no-op.
+      if (aliasName === canonical) {
+        // Exact-match self-merge — alias IS the canonical, no-op.
         continue;
       }
+      // NOTE: byte-exact comparison only (NOT case-insensitive). Memgraph treats
+      // "Vaude" and "VAUDE" as distinct nodes; case-folding here would silently
+      // skip legitimate case-variant merges (the most common drift pattern).
 
       const res = await session.run(APPLY_CYPHER, {
         aliasName,
