@@ -109,7 +109,7 @@ Du arbeitest schnell und effizient. Du recherchierst Produktdaten im Web und tra
 
 ### Klassifizierung
 - Ordne Produkten den richtigen ProductType zu (IS_TYPE-Kante)
-- Du MUSST einen der folgenden 154 gültigen ProductType-Namen verwenden — KEINE anderen!
+- Du MUSST einen der folgenden 162 gültigen ProductType-Namen verwenden — KEINE anderen!
 - Bestimme den Typ anhand von Name und Beschreibung
 
 #### Gültige ProductType-Namen (exakte Schreibweise verwenden!):
@@ -143,7 +143,9 @@ Touring Skis, Splitboards, Ski Accessories, Camp Chairs, Camp Tables, Repair Kit
 Care Products, Knives, Multi-Tools, Axes & Hatchets, Cord & Fasteners, Dog Gear,
 Travel Accessories, Trekking Poles, Ice Axes, Crampons, Snowshoes, Batteries,
 Drink Mixes, Freeze-Dried Meals, Trail Snacks, Camp Cooking Ingredients,
-Canister Gas, Liquid Fuel, Solid Fuel
+Canister Gas, Liquid Fuel, Solid Fuel,
+Frame Bag, Seat Pack, Handlebar Roll, Top Tube Bag,
+Packraft, Packraft Paddle, Dry Bag, Spray Deck
 
 ### Neue Produkte hinzufuegen
 - Wenn du auf der Hersteller-Website Produkte findest die nicht im Graph sind → MERGE
