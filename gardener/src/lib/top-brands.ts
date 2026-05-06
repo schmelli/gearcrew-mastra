@@ -67,7 +67,6 @@ export const TOP_50_BRANDS: readonly string[] = [
   "Icebreaker",
   "Jetboil",
   "Katadyn",
-  "Lundhaugs",
   "Merino.tech",
   "MSR",
   "MYOG",
@@ -84,6 +83,15 @@ export const TOP_50_BRANDS: readonly string[] = [
   "Ortovox",
   "Salewa",
   "Vaude",
+  // Phase-10 additions (GEA-1091) — Bikepacking + Packrafting coverage push
+  "Alpacka Raft",
+  "Apidura",
+  "Kokopelli",
+  "Miss Grape",
+  "MRS",
+  "Restrap",
+  "Revelate Designs",
+  "Tailfin",
 ] as const;
 
 const TOP_50_BRANDS_LOWER: ReadonlySet<string> = new Set(

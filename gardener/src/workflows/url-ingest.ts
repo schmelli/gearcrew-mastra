@@ -23,7 +23,18 @@ import { getReadSession, getWriteSession, toNumber } from "../lib/memgraph.js";
 import { getSupabase } from "../lib/supabase.js";
 import { extractJson, sanitizeWebContent } from "../lib/utils.js";
 
-const HIGH_CONF_THRESHOLD = 0.85;
+/**
+ * Default thresholds. The HIGH_CONF threshold is now per-call configurable
+ * via triggerSchema.high_conf_threshold (see GEA-1090, Phase-10 CONTEXT D-4).
+ *
+ * Phase-10 callers pass 0.92 for stricter auto-merge gates around launch;
+ * pre-Phase-10 callers continue to use the 0.85 default unchanged.
+ *
+ * Per reference_mastra_v3_quirks.md, Zod .default() is NOT applied to inputData
+ * in Mastra v3 — call-sites use `inputData.high_conf_threshold ?? DEFAULT_*`
+ * as belt-and-braces.
+ */
+const DEFAULT_HIGH_CONF_THRESHOLD = 0.85;
 const LOW_CONF_THRESHOLD = 0.5;
 const FIRECRAWL_TIMEOUT_MS = 30000;
 const MARKDOWN_PROMPT_BUDGET = 24000;
@@ -65,12 +76,18 @@ function isUrlSafeToProxy(urlString: string): boolean {
 const triggerSchema = z.object({
   url: z.string().url(),
   kind: z.enum(["product", "review", "forum", "auto"]).default("auto"),
+  // GEA-1090: optional per-call confidence override. Phase-10 sends 0.92;
+  // older callers omit it and get DEFAULT_HIGH_CONF_THRESHOLD (0.85) =
+  // identical-to-pre-change behaviour. Out-of-range values rejected by Zod.
+  high_conf_threshold: z.number().min(0.5).max(1.0).optional(),
 });
 
 const fetchOutputSchema = z.object({
   url: z.string(),
   kind: z.enum(["product", "review", "forum", "auto"]),
   markdown: z.string(),
+  // Propagated through every step so writeGraph can read it.
+  high_conf_threshold: z.number().min(0.5).max(1.0).optional(),
 });
 
 const extractedItemSchema = z.object({
@@ -164,6 +181,7 @@ const validateAndFetch = createStep({
       url: inputData.url,
       kind: inputData.kind,
       markdown,
+      high_conf_threshold: inputData.high_conf_threshold,
     };
   },
 });
@@ -473,6 +491,7 @@ interface ItemReport {
 async function processItem(
   item: ExtractedItem,
   sourceUrl: string,
+  highConfThreshold: number,
 ): Promise<ItemReport> {
   const empty: ItemReport = {
     itemsCreated: 0,
@@ -492,7 +511,7 @@ async function processItem(
     // No match — only create new items at high confidence. Medium-confidence
     // unknowns are dropped because gardener_review_queue keys on an existing
     // memgraph_node_id, which doesn't exist for not-yet-created items.
-    if (item.confidence < HIGH_CONF_THRESHOLD) {
+    if (item.confidence < highConfThreshold) {
       return { ...empty, itemsSkippedLowConf: 1 };
     }
     const brandWasNew = !(await brandExists(item.brand));
@@ -543,7 +562,7 @@ async function processItem(
     if (f.suggested === null || f.suggested === undefined) continue;
     if (f.current !== null) continue; // never clobber existing values
 
-    if (item.confidence >= HIGH_CONF_THRESHOLD) {
+    if (item.confidence >= highConfThreshold) {
       await mergeFieldOnExisting({
         nodeId: matched.nodeId,
         field: f.target,
@@ -574,6 +593,12 @@ const writeGraph = createStep({
   inputSchema: extractOutputSchema,
   outputSchema: writeOutputSchema,
   execute: async ({ inputData }) => {
+    // Per reference_mastra_v3_quirks.md: Zod .default() does NOT apply to
+    // inputData in Mastra v3. ?? is the belt-and-braces fallback. Optional
+    // (no Zod default) → undefined → DEFAULT_HIGH_CONF_THRESHOLD.
+    const highConfThreshold =
+      inputData.high_conf_threshold ?? DEFAULT_HIGH_CONF_THRESHOLD;
+
     let brandsCreated = 0;
     let itemsCreated = 0;
     let itemsMatched = 0;
@@ -581,7 +606,7 @@ const writeGraph = createStep({
     let itemsSkippedLowConf = 0;
 
     for (const item of inputData.items) {
-      const r = await processItem(item, inputData.url);
+      const r = await processItem(item, inputData.url, highConfThreshold);
       brandsCreated += r.brandsCreated;
       itemsCreated += r.itemsCreated;
       itemsMatched += r.itemsMatched;
@@ -590,7 +615,7 @@ const writeGraph = createStep({
     }
 
     console.log(
-      `[urlIngest] ${inputData.url} — created ${itemsCreated} items (${brandsCreated} new brands), matched ${itemsMatched}, queued ${proposalsQueued} proposals, skipped ${itemsSkippedLowConf} low-conf`,
+      `[urlIngest] ${inputData.url} (highConf=${highConfThreshold.toFixed(2)}) — created ${itemsCreated} items (${brandsCreated} new brands), matched ${itemsMatched}, queued ${proposalsQueued} proposals, skipped ${itemsSkippedLowConf} low-conf`,
     );
 
     return {
