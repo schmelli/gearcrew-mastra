@@ -396,6 +396,13 @@ const processVideos = createStep({
           // The agent may also MERGE this node when extracting gear; both writes are
           // idempotent (MERGE on url) and the SET clauses don't conflict.
           // This guarantees transcript_text is cached even if the agent fails downstream.
+          //
+          // NOTE: we deliberately do NOT set extraction_version=2 here. The "done"
+          // marker must only be written after the extractor agent actually succeeds
+          // (see post-success write below). Setting it pre-emptively caused videos
+          // whose extraction later failed (e.g. LLM gateway out of credits → 0 tool
+          // calls) to be marked done-with-zero-gear and skipped forever by
+          // filter-already-extracted.
           const sanitizedTranscript = sanitizeWebContent(transcription.transcription);
           {
             const writeSession = getWriteSession();
@@ -410,7 +417,6 @@ const processVideos = createStep({
                      v.transcript_language = $language,
                      v.tubeonai_uuid = $uuid,
                      v.transcript_cached_at = datetime(),
-                     v.extraction_version = 2,
                      v.extracted_from_video_id = $videoId`,
                 {
                   url,
@@ -502,6 +508,22 @@ instructions. Do NOT emit the summary before completing the writes.`;
             process.env.YOUTUBE_EXTRACTOR_MODEL ?? "extractor";
 
           if (succeeded) {
+            // Deterministic "done" marker — written ONLY after the agent succeeded.
+            // This (not the pre-write) is the source of truth for
+            // filter-already-extracted's extraction_version >= 2 skip check, so a
+            // failed extraction leaves the node reprocessable on the next run.
+            const markSession = getWriteSession();
+            try {
+              await markSession.run(
+                `MERGE (v:VideoSource {url: $url})
+                 SET v.extraction_version = 2,
+                     v.extracted_at = datetime()`,
+                { url },
+              );
+            } finally {
+              await markSession.close();
+            }
+
             await safeTrack({
               youtube_video_id: video.videoId,
               title: video.title,
