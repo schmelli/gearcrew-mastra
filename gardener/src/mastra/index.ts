@@ -2,6 +2,8 @@ import { Mastra } from "@mastra/core/mastra";
 import cron, { type ScheduledTask } from "node-cron";
 import { gardenerHaiku, gardenerSonnet } from "../agents/gardener-v3.js";
 import { youtubeGearExtractor } from "../agents/youtube-gear-extractor.js";
+import { enrichGearItem } from "../lib/enrichment/enrich-gear-item.js";
+import type { EnrichableItem } from "../lib/enrichment/enrich-gear-item.js";
 import { brandPortfolioAudit } from "../workflows/brand-portfolio-audit.js";
 import { youtubePlaylistIngest } from "../workflows/youtube-playlist-ingest.js";
 import { urlIngest } from "../workflows/url-ingest.js";
@@ -38,6 +40,42 @@ import { closeDriver } from "../lib/memgraph.js";
 // confirmed; importers and exports above are removed so they cannot run.
 
 const port = parseInt(process.env.PORT || "4111", 10);
+
+// ---------------------------------------------------------------------------
+// POST /api/enrichment/enrich — UI-status-only write endpoint
+// Phase 27 — ARCH-01 (D-05/D-07/D-08): winterberry triggers single-item
+// enrichment here; gardener writes enrichment_ui_state='done'/'failed'.
+//
+// NOTE: This endpoint writes ONLY enrichment_ui_state (a UI flag), never
+// enrichment_status (reserved for Phase 29 recountAndGate). This is an
+// intentional deviation from the 2026-05-03 SoT deregistration rule which
+// only covers data-truth gear_items writes. UI-status writes are permitted
+// per D-07/D-08 decision.
+//
+// Auth: T-27-08 — GARDENER_AUTH_TOKEN header check (spoofing mitigation).
+// Input: { itemId: string, userId: string, item: EnrichableItem }
+// Response: 200 (fire-and-forget — enrichment runs async after response)
+// ---------------------------------------------------------------------------
+
+interface EnrichRequestBody {
+  itemId: string;
+  userId: string;
+  item: EnrichableItem;
+}
+
+function isValidEnrichRequest(body: unknown): body is EnrichRequestBody {
+  if (!body || typeof body !== "object") return false;
+  const b = body as Record<string, unknown>;
+  return (
+    typeof b.itemId === "string" &&
+    b.itemId.length > 0 &&
+    typeof b.userId === "string" &&
+    b.userId.length > 0 &&
+    typeof b.item === "object" &&
+    b.item !== null &&
+    typeof (b.item as Record<string, unknown>).name === "string"
+  );
+}
 
 export const mastra = new Mastra({
   agents: {
@@ -89,6 +127,47 @@ export const mastra = new Mastra({
     // 9525 tips × 50/batch = 191 batches × ~3s ≈ 10 min). Default 5 min was
     // too tight. 30 min covers worst-case batch retries.
     timeout: process.env.NODE_ENV === "production" ? 1800000 : 600000,
+    apiRoutes: [
+      {
+        path: "/api/enrichment/enrich",
+        method: "POST" as const,
+        handler: async (ctx) => {
+          // T-27-08: Spoofing mitigation — reject unless Authorization matches GARDENER_AUTH_TOKEN
+          const authHeader = ctx.req.header("Authorization");
+          const expectedToken = process.env.GARDENER_AUTH_TOKEN;
+          if (!expectedToken || authHeader !== expectedToken) {
+            return ctx.json({ error: "Unauthorized" }, 401);
+          }
+
+          let body: unknown;
+          try {
+            body = await ctx.req.json();
+          } catch {
+            return ctx.json({ error: "Invalid JSON body" }, 400);
+          }
+
+          if (!isValidEnrichRequest(body)) {
+            return ctx.json(
+              { error: "Missing or invalid fields: itemId, userId, item.name required" },
+              400,
+            );
+          }
+
+          const { itemId, userId, item } = body;
+
+          // Fire-and-forget: return 200 immediately, enrichment runs in background.
+          // Supabase writes (enrichment_ui_state='done'/'failed') happen in enrichGearItem.
+          void enrichGearItem(itemId, userId, item).catch((err) => {
+            console.error(
+              "[api/enrichment/enrich] Unhandled enrichment error (should not reach here):",
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+
+          return ctx.json({ accepted: true, itemId }, 200);
+        },
+      },
+    ],
   },
 });
 
