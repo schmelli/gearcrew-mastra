@@ -531,6 +531,7 @@ Return an array where each item represents one product variant.`;
    * Calculate trust score based on URL domain
    */
   private calculateTrustScore(url: string): number {
+    // SUPERSEDED by gardener/src/lib/trusted-sources.ts (trusted_review_sources table)
     const trustedDomains = [
       'rei.com',
       'backcountry.com',

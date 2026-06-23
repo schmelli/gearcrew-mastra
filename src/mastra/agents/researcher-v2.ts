@@ -150,6 +150,7 @@ const verifyBrandTool = createTool({
 // ============================================================================
 
 function getTrustScore(url: string): number {
+  // SUPERSEDED by gardener/src/lib/trusted-sources.ts (trusted_review_sources table)
   const trustedDomains: Record<string, number> = {
     'rei.com': 0.95,
     'backcountry.com': 0.9,

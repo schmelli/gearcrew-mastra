@@ -1,6 +1,22 @@
 import { createWorkflow, createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { getReadSession, getWriteSession } from "../lib/memgraph.js";
+import {
+  getTrustedDomains,
+  matchesTrustedDomain,
+} from "../lib/trusted-sources.js";
+
+/**
+ * Default trusted domains, used only as a synchronous fallback when no resolved
+ * domain list is injected into crossReferenceWeights (e.g. unit tests). The
+ * live workflow injects the full list from the `trusted_review_sources` table
+ * via getTrustedDomains(). See gardener/src/lib/trusted-sources.ts.
+ */
+const DEFAULT_TRUSTED_DOMAINS = [
+  "rei.com",
+  "backcountry.com",
+  "outdoorgearlab.com",
+];
 
 // ---------------------------------------------------------------------------
 // Helper exports (also used by tests)
@@ -50,13 +66,11 @@ export function extractWeightsFromText(text: string): number[] {
 }
 
 // Critical #1: proper hostname-based trusted-domain check (prevents "notrei.com" spoofing via .includes())
+// Matching semantics now live in trusted-sources.ts (matchesTrustedDomain),
+// backed by the `trusted_review_sources` table. This thin wrapper preserves the
+// original (url, trusted[]) call signature.
 function isTrustedDomain(url: string, trusted: string[]): boolean {
-  try {
-    const hostname = new URL(url).hostname;
-    return trusted.some(d => hostname === d || hostname.endsWith("." + d));
-  } catch {
-    return false;
-  }
+  return matchesTrustedDomain(url, trusted);
 }
 
 // Critical #2: deduplicate sources by URL before cross-referencing
@@ -73,6 +87,7 @@ function deduplicateSourcesByUrl(sources: Array<{weight: number, url: string}>):
 export function crossReferenceWeights(
   existingWeight: number,
   sources: Array<{ weight: number; url: string }>,
+  trustedDomains: string[] = DEFAULT_TRUSTED_DOMAINS,
 ): {
   verified: boolean;
   newWeight: number;
@@ -80,7 +95,9 @@ export function crossReferenceWeights(
   agreingSources: string[];
 } {
   const TOLERANCE = 0.1;
-  const TRUSTED_DOMAINS = ["rei.com", "backcountry.com", "outdoorgearlab.com"];
+  // Injected from the `trusted_review_sources` table by the workflow step;
+  // falls back to DEFAULT_TRUSTED_DOMAINS when called without an explicit list.
+  const TRUSTED_DOMAINS = trustedDomains;
 
   // Critical #2: deduplicate before cross-referencing
   const dedupedSources = deduplicateSourcesByUrl(sources);
@@ -447,6 +464,10 @@ const crossReferenceStep = createStep({
     const searchResults = searchResult?.searchResults ?? [];
     const { scrapeResults } = inputData;
 
+    // Resolve trusted domains once per run from the `trusted_review_sources`
+    // table (cached + fallback handled inside trusted-sources.ts).
+    const trustedDomains = await getTrustedDomains();
+
     const verificationResults: VerificationResult[] = [];
 
     for (const item of items) {
@@ -456,7 +477,11 @@ const crossReferenceStep = createStep({
         scrapeResults.find((r) => r.id === item.id)?.sources ?? [];
 
       const allSources = [...searchSources, ...scrapeSources];
-      const result = crossReferenceWeights(item.currentWeight, allSources);
+      const result = crossReferenceWeights(
+        item.currentWeight,
+        allSources,
+        trustedDomains,
+      );
 
       const oldConfidence = item.confidence ?? "low";
       const confidenceOrder = { low: 0, medium: 1, high: 2 } as const;
