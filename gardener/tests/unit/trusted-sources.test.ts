@@ -21,6 +21,7 @@ import {
   getTrustedDomains,
   getTrustWeight,
   isTrustedDomain,
+  buildSearchUrl,
   clearTrustedSourcesCache,
 } from "../../src/lib/trusted-sources.js";
 
@@ -82,6 +83,7 @@ function okResult(
     trust_weight: number | string;
     category: string;
     active: boolean;
+    search_url_template?: string | null;
   }>,
 ) {
   return Promise.resolve({ data: rows, error: null });
@@ -111,6 +113,7 @@ describe("getTrustedSources — DB success + cache", () => {
         trustWeight: 0.66,
         category: "review",
         active: true,
+        searchUrlTemplate: null,
       },
     ]);
     // Cache hit → DB queried only once.
@@ -201,5 +204,68 @@ describe("derived accessors (over fallback data)", () => {
   it("isTrustedDomain reflects membership including subdomains", async () => {
     await expect(isTrustedDomain("https://shop.rei.com")).resolves.toBe(true);
     await expect(isTrustedDomain("https://notrei.com")).resolves.toBe(false);
+  });
+});
+
+describe("searchUrlTemplate + buildSearchUrl", () => {
+  it("maps search_url_template from the DB row", async () => {
+    selectMock.mockReturnValueOnce(
+      okResult([
+        {
+          domain: "bettertrail.com",
+          name: "BetterTrail",
+          trust_weight: 0.7,
+          category: "review",
+          active: true,
+          search_url_template: "https://bettertrail.com/search?q={query}",
+        },
+      ]),
+    );
+    const [source] = await getTrustedSources();
+    expect(source?.searchUrlTemplate).toBe(
+      "https://bettertrail.com/search?q={query}",
+    );
+  });
+
+  it("defaults searchUrlTemplate to null when the column is absent", async () => {
+    selectMock.mockReturnValueOnce(
+      okResult([
+        { domain: "x.com", name: "X", trust_weight: 0.5, category: "review", active: true },
+      ]),
+    );
+    const [source] = await getTrustedSources();
+    expect(source?.searchUrlTemplate).toBeNull();
+  });
+
+  it("buildSearchUrl substitutes the URL-encoded query into the template", async () => {
+    selectMock.mockReturnValueOnce(
+      okResult([
+        {
+          domain: "outdoorsmagic.com",
+          name: "Outdoors Magic",
+          trust_weight: 0.75,
+          category: "review",
+          active: true,
+          search_url_template: "https://outdoorsmagic.com/?s={query}&submit=",
+        },
+      ]),
+    );
+    await expect(
+      buildSearchUrl("outdoorsmagic.com", "Rab Neutrino"),
+    ).resolves.toBe("https://outdoorsmagic.com/?s=Rab%20Neutrino&submit=");
+  });
+
+  it("buildSearchUrl returns null when the matched source has no template", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    selectMock.mockReturnValueOnce(okResult([])); // fallback: outdoorgearlab has no template
+    await expect(buildSearchUrl("outdoorgearlab.com", "tent")).resolves.toBeNull();
+    warn.mockRestore();
+  });
+
+  it("buildSearchUrl returns null for an untrusted domain", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    selectMock.mockReturnValueOnce(okResult([]));
+    await expect(buildSearchUrl("amazon.com", "tent")).resolves.toBeNull();
+    warn.mockRestore();
   });
 });

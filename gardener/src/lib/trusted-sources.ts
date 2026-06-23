@@ -32,6 +32,13 @@ export interface TrustedSource {
   trustWeight: number;
   category: TrustedSourceCategory;
   active: boolean;
+  /**
+   * On-site search URL with a `{query}` placeholder (substitute the
+   * URL-encoded search term). `null` = no native on-site search; callers fall
+   * back to a Serper `site:` query. Lets the pipeline curl the site search and
+   * hand firecrawl only the result set instead of scraping the whole site.
+   */
+  searchUrlTemplate: string | null;
 }
 
 /**
@@ -40,14 +47,14 @@ export interface TrustedSource {
  * rather than disabling trust entirely.
  */
 export const DEFAULT_TRUSTED_SOURCES: readonly TrustedSource[] = [
-  { domain: "outdoorgearlab.com", name: "OutdoorGearLab", trustWeight: 0.9, category: "review", active: true },
-  { domain: "switchbacktravel.com", name: "Switchback Travel", trustWeight: 0.85, category: "review", active: true },
-  { domain: "cleverhiker.com", name: "CleverHiker", trustWeight: 0.85, category: "review", active: true },
-  { domain: "sectionhiker.com", name: "SectionHiker", trustWeight: 0.8, category: "review", active: true },
-  { domain: "trailspace.com", name: "Trailspace", trustWeight: 0.8, category: "community", active: true },
-  { domain: "gearjunkie.com", name: "GearJunkie", trustWeight: 0.75, category: "review", active: true },
-  { domain: "rei.com", name: "REI", trustWeight: 0.7, category: "retailer", active: true },
-  { domain: "backcountry.com", name: "Backcountry", trustWeight: 0.7, category: "retailer", active: true },
+  { domain: "outdoorgearlab.com", name: "OutdoorGearLab", trustWeight: 0.9, category: "review", active: true, searchUrlTemplate: null },
+  { domain: "switchbacktravel.com", name: "Switchback Travel", trustWeight: 0.85, category: "review", active: true, searchUrlTemplate: null },
+  { domain: "cleverhiker.com", name: "CleverHiker", trustWeight: 0.85, category: "review", active: true, searchUrlTemplate: null },
+  { domain: "sectionhiker.com", name: "SectionHiker", trustWeight: 0.8, category: "review", active: true, searchUrlTemplate: null },
+  { domain: "trailspace.com", name: "Trailspace", trustWeight: 0.8, category: "community", active: true, searchUrlTemplate: null },
+  { domain: "gearjunkie.com", name: "GearJunkie", trustWeight: 0.75, category: "review", active: true, searchUrlTemplate: "https://gearjunkie.com/?s={query}" },
+  { domain: "rei.com", name: "REI", trustWeight: 0.7, category: "retailer", active: true, searchUrlTemplate: null },
+  { domain: "backcountry.com", name: "Backcountry", trustWeight: 0.7, category: "retailer", active: true, searchUrlTemplate: null },
 ] as const;
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -79,6 +86,7 @@ interface TrustedReviewSourceRow {
   trust_weight?: number | string | null;
   category?: string | null;
   active?: boolean | null;
+  search_url_template?: string | null;
 }
 
 function mapRow(row: TrustedReviewSourceRow): TrustedSource | null {
@@ -100,6 +108,7 @@ function mapRow(row: TrustedReviewSourceRow): TrustedSource | null {
     trustWeight,
     category: toCategory(row.category),
     active: row.active ?? true,
+    searchUrlTemplate: row.search_url_template ?? null,
   };
 }
 
@@ -153,7 +162,7 @@ async function loadFromDb(): Promise<TrustedSource[]> {
   const supa = getSupabase();
   const { data, error } = await supa
     .from("trusted_review_sources")
-    .select("domain, name, trust_weight, category, active")
+    .select("domain, name, trust_weight, category, active, search_url_template")
     .eq("active", true);
 
   if (error) {
@@ -251,6 +260,25 @@ export function matchesTrustedDomain(
   const host = normalizeDomain(urlOrDomain);
   if (!host) return false;
   return trustedDomains.some((d) => hostMatchesDomain(host, d));
+}
+
+/**
+ * Build a ready-to-fetch on-site search URL for a trusted source, substituting
+ * the URL-encoded `query` for the `{query}` placeholder in its
+ * `searchUrlTemplate`. Returns `null` when the matched source has no native
+ * search template (caller should fall back to a Serper `site:<domain>` query)
+ * or when the input matches no active trusted source.
+ */
+export async function buildSearchUrl(
+  urlOrDomain: string,
+  query: string,
+): Promise<string | null> {
+  const host = normalizeDomain(urlOrDomain);
+  if (!host) return null;
+  const sources = await getTrustedSources();
+  const match = sources.find((s) => hostMatchesDomain(host, s.domain));
+  if (!match?.searchUrlTemplate) return null;
+  return match.searchUrlTemplate.replace(/\{query\}/g, encodeURIComponent(query));
 }
 
 /** Clears the in-memory cache. Primarily for tests and forced refresh. */
